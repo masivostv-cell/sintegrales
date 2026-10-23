@@ -9,13 +9,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
-  --papel:#F5F7FA; --hoja:#FFFFFF; --tinta:#1D3557; --grafito:#3B4048; --suave:#6B7480;
+  --papel:#E9EFF6; --hoja:#FFFFFF; --tinta:#1D3557; --grafito:#3B4048; --suave:#6B7480;
   --linea:#D6DEE8; --rojo:#C0392B; --verde:#2E7D4F; --azul:#2F6FB3; --resalte:#E8F0FA;
   --radio:10px; color-scheme:light;
   box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
 }
 @media (prefers-color-scheme:dark){
-  :root{ --papel:#12171E; --hoja:#1B222C; --tinta:#BFD4EE; --grafito:#E4E8EE; --suave:#98A2AF;
+  :root{ --papel:#111821; --hoja:#1B222C; --tinta:#BFD4EE; --grafito:#E4E8EE; --suave:#98A2AF;
     --linea:#2E3846; --rojo:#F07467; --verde:#5FC08A; --azul:#7FB2EA; --resalte:#223247; color-scheme:dark; }
 }
 *,*::before,*::after{box-sizing:inherit}
@@ -79,6 +79,18 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .foto img{max-width:100%;max-height:70vh;display:block;margin:10px auto;border-radius:6px;border:1px solid var(--linea)}
 .estudiante{font-size:1.15rem;color:var(--tinta);font-weight:700;margin:4px 0}
 .cargando{color:var(--suave);padding:10px 0}
+
+/* fondo con figuras de educación */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='250' viewBox='0 0 250 250'%3E%3Cg fill='none' stroke='%231D3557' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' opacity='0.11'%3E%3Cg transform='translate(40 38) rotate(-30)'%3E%3Crect x='-22' y='-5' width='36' height='10' rx='1.5'/%3E%3Cpath d='M14-5l12 5-12 5z'/%3E%3Cpath d='M-22-5v10'/%3E%3Cpath d='M-16-5v10'/%3E%3C/g%3E%3Cg transform='translate(150 30) rotate(8)'%3E%3Cpath d='M0 0c-8-5-18-6-26-3v26c8-3 18-2 26 3 8-5 18-6 26-3V-3C18-6 8-5 0 0z'/%3E%3Cpath d='M0 0v26'/%3E%3C/g%3E%3Cg transform='translate(220 110) rotate(-10)'%3E%3Cpath d='M0-12l24 10-24 10-24-10z'/%3E%3Cpath d='M-14 3v9c8 6 20 6 28 0V3'/%3E%3Cpath d='M24-2v14'/%3E%3C/g%3E%3Cg transform='translate(95 112) rotate(20)'%3E%3Crect x='-26' y='-6' width='52' height='12' rx='1.5'/%3E%3Cpath d='M-18-6v5M-10-6v7M-2-6v5M6-6v7M14-6v5'/%3E%3C/g%3E%3Cg transform='translate(30 150) rotate(0)'%3E%3Cpath d='M0-6c-6-5-16-3-16 8 0 10 7 18 12 18 2 0 3-1 4-1s2 1 4 1c5 0 12-8 12-18 0-11-10-13-16-8z'/%3E%3Cpath d='M0-6c0-5 2-8 5-10'/%3E%3Cpath d='M2-11c3-3 8-3 9 0-3 2-7 2-9 0z'/%3E%3C/g%3E%3Cg transform='translate(170 180) rotate(12)'%3E%3Cpath d='M-9 8c-6-4-9-10-9-16a18 18 0 0 1 36 0c0 6-3 12-9 16v6H-9z' transform='scale(.75)'/%3E%3Cpath d='M-5 13h10M-4 17h8'/%3E%3C/g%3E%3Cg transform='translate(90 215) rotate(0)'%3E%3Cellipse rx='22' ry='8'/%3E%3Cellipse rx='22' ry='8' transform='rotate(60)'/%3E%3Cellipse rx='22' ry='8' transform='rotate(-60)'/%3E%3Ccircle r='2.5'/%3E%3C/g%3E%3Cg transform='translate(215 225) rotate(0)'%3E%3Ccircle r='15'/%3E%3Cellipse rx='6' ry='15'/%3E%3Cpath d='M-15 0h30M-12-8h24M-12 8h24'/%3E%3C/g%3E%3Cg transform='translate(155 105) rotate(-8)'%3E%3Ctext x='0' y='6' font-family='Georgia,serif' font-size='22' font-weight='700' text-anchor='middle' stroke='none' fill='%231D3557'%3EA%2B%3C/text%3E%3C/g%3E%3Cg transform='translate(35 232) rotate(-15)'%3E%3Cpath d='M0-16v32M-10 16l10-32 10 32'/%3E%3Ccircle cy='-16' r='3'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");background-size:250px 250px}
+@media (prefers-color-scheme:dark){body::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='250' height='250' viewBox='0 0 250 250'%3E%3Cg fill='none' stroke='%23BFD4EE' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' opacity='0.07'%3E%3Cg transform='translate(40 38) rotate(-30)'%3E%3Crect x='-22' y='-5' width='36' height='10' rx='1.5'/%3E%3Cpath d='M14-5l12 5-12 5z'/%3E%3Cpath d='M-22-5v10'/%3E%3Cpath d='M-16-5v10'/%3E%3C/g%3E%3Cg transform='translate(150 30) rotate(8)'%3E%3Cpath d='M0 0c-8-5-18-6-26-3v26c8-3 18-2 26 3 8-5 18-6 26-3V-3C18-6 8-5 0 0z'/%3E%3Cpath d='M0 0v26'/%3E%3C/g%3E%3Cg transform='translate(220 110) rotate(-10)'%3E%3Cpath d='M0-12l24 10-24 10-24-10z'/%3E%3Cpath d='M-14 3v9c8 6 20 6 28 0V3'/%3E%3Cpath d='M24-2v14'/%3E%3C/g%3E%3Cg transform='translate(95 112) rotate(20)'%3E%3Crect x='-26' y='-6' width='52' height='12' rx='1.5'/%3E%3Cpath d='M-18-6v5M-10-6v7M-2-6v5M6-6v7M14-6v5'/%3E%3C/g%3E%3Cg transform='translate(30 150) rotate(0)'%3E%3Cpath d='M0-6c-6-5-16-3-16 8 0 10 7 18 12 18 2 0 3-1 4-1s2 1 4 1c5 0 12-8 12-18 0-11-10-13-16-8z'/%3E%3Cpath d='M0-6c0-5 2-8 5-10'/%3E%3Cpath d='M2-11c3-3 8-3 9 0-3 2-7 2-9 0z'/%3E%3C/g%3E%3Cg transform='translate(170 180) rotate(12)'%3E%3Cpath d='M-9 8c-6-4-9-10-9-16a18 18 0 0 1 36 0c0 6-3 12-9 16v6H-9z' transform='scale(.75)'/%3E%3Cpath d='M-5 13h10M-4 17h8'/%3E%3C/g%3E%3Cg transform='translate(90 215) rotate(0)'%3E%3Cellipse rx='22' ry='8'/%3E%3Cellipse rx='22' ry='8' transform='rotate(60)'/%3E%3Cellipse rx='22' ry='8' transform='rotate(-60)'/%3E%3Ccircle r='2.5'/%3E%3C/g%3E%3Cg transform='translate(215 225) rotate(0)'%3E%3Ccircle r='15'/%3E%3Cellipse rx='6' ry='15'/%3E%3Cpath d='M-15 0h30M-12-8h24M-12 8h24'/%3E%3C/g%3E%3Cg transform='translate(155 105) rotate(-8)'%3E%3Ctext x='0' y='6' font-family='Georgia,serif' font-size='22' font-weight='700' text-anchor='middle' stroke='none' fill='%23BFD4EE'%3EA%2B%3C/text%3E%3C/g%3E%3Cg transform='translate(35 232) rotate(-15)'%3E%3Cpath d='M0-16v32M-10 16l10-32 10 32'/%3E%3Ccircle cy='-16' r='3'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")}}
+@media print{body::before{display:none}}
+header.top{background:color-mix(in srgb,var(--hoja) 92%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);position:sticky;top:0;z-index:5}
+.panel{box-shadow:0 1px 2px rgba(29,53,87,.06),0 6px 20px rgba(29,53,87,.06)}
+.login{max-width:440px;margin:0 auto;padding:10vh 16px 16px}
+.login .marca{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.login .marca svg{flex:0 0 auto}
+.login .marca h2{margin:0;line-height:1.2}
+.login .marca p{margin:2px 0 0;color:var(--suave);font-size:.95rem}
 #printArea{display:none}
 @media print{
   @page{size:auto;margin:8mm}
@@ -372,8 +384,9 @@ function vistaConfig(error = '') {
     </div></div>`;
 }
 function vistaLogin(error = '', info = '') {
-  app.innerHTML = `<div class="wrap" style="max-width:440px;padding-top:8vh">
-    <h2>Calificador de hojas de respuestas</h2>
+  app.innerHTML = `<div class="login">
+    <div class="marca"><svg width="52" height="52" viewBox="0 0 52 52" aria-hidden="true"><rect x="6" y="4" width="34" height="44" rx="4" fill="var(--hoja)" stroke="var(--tinta)" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="var(--tinta)"/><circle cx="26" cy="16" r="3.5" fill="none" stroke="var(--tinta)" stroke-width="1.5"/><circle cx="16" cy="26" r="3.5" fill="none" stroke="var(--tinta)" stroke-width="1.5"/><circle cx="26" cy="26" r="3.5" fill="var(--tinta)"/><circle cx="16" cy="36" r="3.5" fill="none" stroke="var(--tinta)" stroke-width="1.5"/><circle cx="26" cy="36" r="3.5" fill="none" stroke="var(--tinta)" stroke-width="1.5"/><circle cx="40" cy="38" r="10" fill="var(--verde)"/><path d="M35 38l3.5 3.5L45 35" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div><h2>Calificador de hojas de respuestas</h2><p>Ingrese con la cuenta que le entregó el administrador.</p></div></div>
     <div class="panel">
       <label class="f">Correo<input id="lgEmail" type="email" autocomplete="username"></label>
       <label class="f">Contraseña<input id="lgPass" type="password" autocomplete="current-password"></label>
