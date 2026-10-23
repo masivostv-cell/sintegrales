@@ -105,6 +105,7 @@ header.top{background:color-mix(in srgb,var(--hoja) 92%,transparent);backdrop-fi
 .filtro{width:100%;max-width:360px;margin:0 0 10px}
 .vista-hoja{max-width:430px;margin:6px auto 0;border:1px solid var(--linea);border-radius:6px;overflow:hidden;box-shadow:0 4px 14px rgba(29,53,87,.12);background:#fff}
 .vista-hoja svg{display:block;width:100%;height:auto}
+.vista-hoja svg+svg{border-top:6px solid var(--linea)}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--linea);border-radius:999px;background:var(--papel);cursor:pointer;font-size:.92rem}
 #printArea{display:none}
 @media print{
@@ -326,17 +327,43 @@ const OMR = (() => {
     b.push(unos % 2, (N + K) % 2, 1);
     return b;
   }
+  // Código v2 (varias hojas): inicio + 7 bits preguntas + 3 bits opciones + 8 bits primera pregunta + 2 control + fin
+  const CODE2 = { y: 250.5, w: 2.8, h: 3, paso: 4.4, celdas: 22 };
+  CODE2.x0 = 100 - CODE2.celdas * CODE2.paso / 2 + (CODE2.paso - CODE2.w) / 2;
+  function codificar2(N, K, off) {
+    const b = [1];
+    for (let i = 6; i >= 0; i--) b.push((N >> i) & 1);
+    for (let i = 2; i >= 0; i--) b.push(((K - 1) >> i) & 1);
+    for (let i = 7; i >= 0; i--) b.push((off >> i) & 1);
+    const unos = b.slice(1).reduce((a, c) => a + c, 0);
+    b.push(unos % 2, (N + K + off) % 2, 1);
+    return b;
+  }
+  const celdas2 = () => Array.from({ length: CODE2.celdas }, (_, i) => ({ x: CODE2.x0 + i * CODE2.paso, y: CODE2.y, w: CODE2.w, h: CODE2.h }));
+  function paginas(n, nOpt) {
+    const cap = capacidad(nOpt), total = Math.max(1, Math.ceil(n / cap)), per = Math.ceil(n / total);
+    return Array.from({ length: total }, (_, i) => ({ idx: i, total, off: i * per, N: Math.min(per, n - i * per) }));
+  }
   function celdasCodigo() {
     return Array.from({ length: CODE.celdas }, (_, i) => ({ x: CODE.x0 + i * CODE.paso, y: CODE.y, w: CODE.w, h: CODE.h }));
   }
   function decodificar(bin, W, H, Hm) {
+    const b2 = celdas2().map(r => sampleRect(bin, W, H, Hm, r) > 0.5 ? 1 : 0);
+    if (b2[0] === 1 && b2[21] === 1) {
+      let N = 0, K = 0, off = 0;
+      for (let i = 1; i <= 7; i++) N = N * 2 + b2[i];
+      for (let i = 8; i <= 10; i++) K = K * 2 + b2[i];
+      for (let i = 11; i <= 18; i++) off = off * 2 + b2[i];
+      K += 1;
+      if (N >= 1 && N <= 100 && K >= 2 && b2.join('') === codificar2(N, K, off).join('')) return { N, K, off };
+    }
     const b = celdasCodigo().map(r => sampleRect(bin, W, H, Hm, r) > 0.5 ? 1 : 0);
     let N = 0, K = 0;
     for (let i = 1; i <= 7; i++) N = N * 2 + b[i];
     for (let i = 8; i <= 10; i++) K = K * 2 + b[i];
     K += 1;
     const ok = b[0] === 1 && b[13] === 1 && N >= 1 && N <= 100 && K >= 2 && b.join('') === codificar(N, K).join('');
-    return ok ? { N, K } : null;
+    return ok ? { N, K, off: 0 } : null;
   }
 
   function read(gray, W, H, n, nOpt, v, opc = {}) {
@@ -355,15 +382,16 @@ const OMR = (() => {
     let formato = null;
     if (opc.auto) {
       formato = decodificar(bin, W, H, best.Hm) || opc.respaldo || null;
-      if (!formato) throw new Error('No se pudo leer el formato de la hoja universal (la franja de cuadritos de abajo). Tome la foto de nuevo con la hoja completa.');
+      if (!formato) throw new Error('No se pudo leer la franja de cuadritos de abajo de la hoja (indica qué hoja es). Tome la foto de nuevo con la hoja completa.');
       n = formato.N; nOpt = formato.K; v = 2;
     }
     const L = layout(n, nOpt, v);
     const fills = L.q.map(q => q.opts.map(([x, y]) => sampleFill(bin, W, H, best.Hm, x, y, L.r * 0.62)));
+    if (!formato) formato = { N: n, K: nOpt, off: 0 };
     return { respuestas: fills.map(decide), fills, H: best.Hm, layout: L, markers: P, formato };
   }
 
-  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, codificar, celdasCodigo, homography, apply, read };
+  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, paginas, codificar, celdasCodigo, codificar2, celdas2, homography, apply, read };
 })();
 </script>
 <script type="module">
@@ -520,14 +548,21 @@ function escucharUni() {
     if (['admin', 'pruebas'].includes(S.view)) render();
   }, e => console.warn('Hoja universal:', e.message)));
 }
-function hojaUniversalSVG(cfg, vals = {}) {
-  const Ly = OMR.layout(cfg.preguntas, cfg.opciones, 2);
+function svgCodigo(N, K, off) {
+  const bits = OMR.codificar2(N, K, off), cel = OMR.celdas2();
+  let s = '';
+  cel.forEach((r, i) => s += bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.35}" y="${r.y + 0.35}" width="${r.w - 0.7}" height="${r.h - 0.7}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
+  return s;
+}
+const pagUnica = n => ({ idx: 0, total: 1, off: 0, N: n });
+function hojaUniversalPag(cfg, vals = {}, pg = pagUnica(cfg.preguntas)) {
+  const Ly = OMR.layout(pg.N, cfg.opciones, 2);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
   s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
   OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
   const o = OMR.ORIENT; s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#000"/>`;
   if (cfg.colegio) s += textoAjustado(100, 9.6, cfg.colegio.toUpperCase(), 136, 3.6, 'font-weight="700" text-anchor="middle"');
-  s += `<text x="100" y="18.5" font-size="5.4" font-weight="700" text-anchor="middle">HOJA DE RESPUESTAS</text>`;
+  s += `<text x="100" y="18.5" font-size="5.4" font-weight="700" text-anchor="middle">HOJA DE RESPUESTAS${pg.total > 1 ? ` · ${pg.idx + 1} DE ${pg.total}` : ''}</text>`;
   const sel = CAMPOS_U.filter(([k]) => (cfg.campos || []).includes(k));
   const ancho = ([, et]) => et.length * 1.72 + 3;
   const filas = [];
@@ -545,27 +580,30 @@ function hojaUniversalSVG(cfg, vals = {}) {
     });
   }
   s += `<text x="14" y="72.5" font-size="2.8" fill="#333">Rellene por completo un solo círculo por pregunta. Responda solo las preguntas y opciones que indique el docente.</text>`;
-  const bits = OMR.codificar(cfg.preguntas, cfg.opciones), cel = OMR.celdasCodigo();
-  cel.forEach((r, i) => s += bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.4}" y="${r.y + 0.4}" width="${r.w - 0.8}" height="${r.h - 0.8}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
-  s += `<text x="${cel[13].x + 6}" y="${cel[0].y + 2.4}" font-size="2.5" fill="#666">${cfg.preguntas} · A–${L[cfg.opciones - 1]}</text>`;
+  s += svgCodigo(pg.N, cfg.opciones, pg.off);
+  s += `<text x="${OMR.celdas2()[21].x + 5}" y="${OMR.celdas2()[0].y + 2.4}" font-size="2.4" fill="#666">${pg.off + 1}–${pg.off + pg.N} · A–${L[cfg.opciones - 1]}</text>`;
   for (let c = 0; c < Ly.cols; c++) {
     const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
     q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2.2}" font-size="3" font-weight="700" text-anchor="middle">${L[i]}</text>`);
   }
   const fs = Math.min(3.3, Ly.rowH * 0.45);
   Ly.q.forEach(q => {
-    s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num}</text>`;
+    s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num + pg.off}</text>`;
     q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width=".3"/>`);
   });
   return s + '</svg>';
 }
+function hojasUniversal(cfg, vals = {}) {
+  return OMR.paginas(cfg.preguntas, cfg.opciones).map(pg => hojaUniversalPag(cfg, vals, pg));
+}
+const hojaUniversalSVG = (cfg, vals) => hojasUniversal(cfg, vals).join('');
 function vUniversal(editable) {
   const u = uni();
   const selOpt = (id, val) => `<select id="${id}">${[2, 3, 4, 5, 6, 7, 8].map(k => `<option value="${k}" ${val == k ? 'selected' : ''}>${L[k - 1]}</option>`).join('')}</select>`;
   if (!editable) return `<div class="panel"><h3>Hoja universal del colegio</h3>
     <p class="estado">Sirve para cualquier materia y curso. Elija el tamaño antes de imprimir; la app reconoce sola el formato al escanear.</p>
     <div class="row">
-      <label class="f">Número de preguntas<input id="tPreg" type="number" min="5" max="100" value="${u.preguntas}"></label>
+      <label class="f">Número de preguntas<input id="tPreg" type="number" min="5" max="300" value="${u.preguntas}"></label>
       <label class="f">Opciones: de la A hasta la${selOpt('tOpt', u.opciones)}</label>
       <label class="f">Copias<input id="tCopias" type="number" min="1" max="200" value="1"></label>
     </div>
@@ -589,7 +627,7 @@ function vUniversal(editable) {
     <h3 style="margin-top:8px">Vista previa</h3><div class="vista-hoja" id="vistaUni">${hojaUniversalSVG(u)}</div></div>`;
 }
 function leerUniForm() {
-  const opciones = parseInt($('#uOpt').value), cap = OMR.capacidad(opciones);
+  const opciones = parseInt($('#uOpt').value), cap = OMR.capacidad(opciones) * 3;
   return {
     colegio: $('#uColegio').value.trim(), opciones,
     preguntas: Math.max(5, Math.min(cap, parseInt($('#uPreg').value) || 50)),
@@ -598,24 +636,36 @@ function leerUniForm() {
 }
 function cfgUniImprimir() {
   if (esAdmin() && $('#uOpt')) return { ...uni(), ...leerUniForm() };
-  const K = parseInt($('#tOpt')?.value) || uni().opciones, cap = OMR.capacidad(K);
+  const K = parseInt($('#tOpt')?.value) || uni().opciones, cap = OMR.capacidad(K) * 3;
   let N = Math.max(5, Math.min(cap, parseInt($('#tPreg')?.value) || uni().preguntas));
   if ($('#tPreg') && +$('#tPreg').value > cap) $('#tPreg').value = N;
-  const c = $('#tCap'); if (c) c.textContent = `Con opciones hasta la ${L[K - 1]} caben hasta ${cap} preguntas.`;
+  const nh = OMR.paginas(N, K).length;
+  const c = $('#tCap'); if (c) c.textContent = `Con opciones hasta la ${L[K - 1]} caben ${OMR.capacidad(K)} preguntas por hoja (hasta ${cap} en 3 hojas).${nh > 1 ? ` Se imprimen ${nh} hojas por estudiante.` : ''}`;
   return { ...uni(), preguntas: N, opciones: K };
 }
-function hojaDePrueba(p, est) {
-  if (p.hoja !== 'universal') return hojaSVG(p, est);
+function hojasDePrueba(p, est) {
+  if (p.hoja !== 'universal') {
+    if (p.v !== 2) return [hojaSVGv1(p, est)];
+    return OMR.paginas(p.n, p.nOpt).map(pg => hojaSVG(p, est, pg));
+  }
   const vals = est ? { estudiante: `${est.apellido} ${est.nombre}`, codigo: est.codigo, curso: p.cursoNombre, materia: p.materia, docente: p.docente, prueba: p.nombre, periodo: p.periodo, fecha: fechaTxt(p.fecha) } : {};
-  return hojaUniversalSVG({ ...uni(), preguntas: p.n, opciones: p.nOpt }, vals);
+  return hojasUniversal({ ...uni(), preguntas: p.n, opciones: p.nOpt }, vals);
 }
 async function leerHoja(file, p) {
-  if (p.hoja !== 'universal') return leerFoto(file, p.n, p.nOpt, p.v);
-  const r = await leerFoto(file, p.n, p.nOpt, 2, { auto: true, respaldo: p.uN ? { N: p.uN, K: p.uOpt } : null });
-  if (r.formato.N < p.n) throw new Error(`Esta hoja universal tiene ${r.formato.N} preguntas y la prueba tiene ${p.n}. Use una hoja con al menos ${p.n} preguntas.`);
-  r.respuestas = r.respuestas.slice(0, p.n);
-  r.fills = r.fills.slice(0, p.n);
-  r.layout = { ...r.layout, q: r.layout.q.slice(0, p.n) };
+  let r;
+  if (p.hoja !== 'universal' && p.v !== 2) r = await leerFoto(file, p.n, p.nOpt, p.v);
+  else {
+    const unaHoja = p.hoja === 'universal' ? (p.uN ? { N: p.uN, K: p.uOpt, off: 0 } : null)
+      : (OMR.paginas(p.n, p.nOpt).length === 1 ? { N: p.n, K: p.nOpt, off: 0 } : null);
+    r = await leerFoto(file, p.n, p.nOpt, 2, { auto: true, respaldo: unaHoja });
+  }
+  const f = r.formato;
+  if (f.off >= p.n) throw new Error(`Esta hoja empieza en la pregunta ${f.off + 1}, pero la prueba solo tiene ${p.n} preguntas.`);
+  const c = Math.min(f.N, p.n - f.off);
+  r.respuestas = r.respuestas.slice(0, c);
+  r.fills = r.fills.slice(0, c);
+  r.layout = { ...r.layout, q: r.layout.q.slice(0, c) };
+  r.off = f.off; r.c = c;
   return r;
 }
 
@@ -750,7 +800,7 @@ function vPruebaForm() {
     ${f.bloqueada ? '<p class="estado">El tipo de hoja no se puede cambiar porque ya hay estudiantes calificados.</p>' : ''}
     <div class="row">
       <label class="f">Curso<select id="pCurso">${S.cursos.map(c => `<option value="${c.id}" ${c.id === f.cursoId ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></label>
-      <label class="f">Número de preguntas<input id="pN" type="number" min="1" max="100" value="${f.n}"></label>
+      <label class="f">Número de preguntas<input id="pN" type="number" min="1" max="300" value="${f.n}"></label>
       <label class="f">Opciones por pregunta<select id="pOpt">${[2, 3, 4, 5, 6, 7, 8].map(k => `<option value="${k}" ${f.nOpt == k ? 'selected' : ''}>${k} (A–${L[k - 1]})</option>`).join('')}</select></label>
       <label class="f">Nota máxima<input id="pEscala" type="number" min="1" step="0.1" value="${f.escala}"></label>
     </div>
@@ -803,7 +853,7 @@ function grilla(n, nOpt, valores, accion, clave) {
 function pintarVista() {
   const el = $('#vistaHoja'); if (!el) return;
   const f = S.form;
-  el.innerHTML = hojaDePrueba({ ...f, cursoNombre: curso(f.cursoId)?.nombre || '' }, null);
+  el.innerHTML = hojasDePrueba({ ...f, cursoNombre: curso(f.cursoId)?.nombre || '' }, null).join('');
 }
 function pintarClave() {
   const f = S.form, el = $('#claveGrid');
@@ -813,7 +863,7 @@ function leerFormPrueba() {
   const f = S.form;
   f.nombre = $('#pNombre').value.trim();
   f.cursoId = $('#pCurso').value;
-  f.n = Math.max(1, Math.min(100, parseInt($('#pN').value) || 1));
+  f.n = Math.max(1, Math.min(300, parseInt($('#pN').value) || 1));
   f.nOpt = parseInt($('#pOpt').value);
   f.escala = parseFloat($('#pEscala').value) || 5;
   for (const [k, id] of [['colegio', 'pColegio'], ['docente', 'pDocente'], ['materia', 'pMateria'], ['periodo', 'pPeriodo'], ['fecha', 'pFecha']]) f[k] = $('#' + id).value.trim();
@@ -821,14 +871,18 @@ function leerFormPrueba() {
   const nota = $('#capNota');
   if (f.hoja === 'universal') {
     f.v = 2;
-    const cap = OMR.capacidad(f.nOpt);
+    const cap = OMR.capacidad(f.nOpt) * 3;
     if (f.n > cap) { f.n = cap; $('#pN').value = cap; }
-    if (nota) nota.textContent = `Sirve cualquier hoja universal que tenga al menos ${f.n} preguntas y opciones hasta la ${L[f.nOpt - 1]}. La app reconoce sola el formato de cada hoja al escanearla.`;
+    const nh = OMR.paginas(f.n, f.nOpt).length;
+    if (nota) nota.textContent = `Sirve cualquier hoja universal que cubra las preguntas 1 a ${f.n} con opciones hasta la ${L[f.nOpt - 1]}${nh > 1 ? ` (al imprimir desde la prueba salen ${nh} hojas por estudiante)` : ''}. La app reconoce sola cada hoja al escanearla.`;
   } else {
     if (f.nOpt > 5) f.v = 2;
-    const cap = f.v === 2 ? OMR.capacidad(f.nOpt) : 100;
+    const cap = f.v === 2 ? OMR.capacidad(f.nOpt) * 3 : 100;
     if (f.n > cap) { f.n = cap; $('#pN').value = cap; }
-    if (nota) nota.textContent = `Con ${f.nOpt} opciones caben hasta ${cap} preguntas en una hoja.`;
+    const pgs = f.v === 2 ? OMR.paginas(f.n, f.nOpt) : [pagUnica(f.n)];
+    if (nota) nota.textContent = f.v !== 2 ? `Diseño anterior: hasta 100 preguntas en una hoja.`
+      : pgs.length > 1 ? `Se imprimen ${pgs.length} hojas por estudiante: ${pgs.map(g => `${g.off + 1}–${g.off + g.N}`).join(', ')}. Caben ${OMR.capacidad(f.nOpt)} preguntas por hoja (máximo 3 hojas).`
+      : `Una hoja. Con ${f.nOpt} opciones caben ${OMR.capacidad(f.nOpt)} preguntas por hoja; si pone más, la prueba se reparte en 2 o 3 hojas.`;
   }
   const enc = $('#encNota');
   if (enc) enc.textContent = f.hoja === 'universal' ? 'Con la hoja universal estos datos no salen impresos (los estudiantes los escriben a mano), pero quedan guardados y salen en el Excel. Si imprime hojas con nombres, sí se llenan.' : 'Lo que escriba aquí sale impreso en cada hoja. Lo que deje vacío queda como línea para llenar a mano.';
@@ -969,22 +1023,38 @@ function actualizarEstudiante() {
     info.innerHTML = `<p class="estudiante">${esc(e.apellido)} ${esc(e.nombre)}</p>${r ? '<p class="aviso">Este estudiante ya tiene calificación. Si escanea de nuevo, se reemplaza.</p>' : ''}`;
   } else info.innerHTML = v ? '<p class="estado">Elija un estudiante de la lista para poder escanear su hoja.</p>' : '';
 }
+function cobertura(s, n) {
+  const ok = new Array(n).fill(false);
+  s.hojas.forEach(h => { for (let i = 0; i < h.c; i++) ok[h.off + i] = true; });
+  const faltan = [];
+  for (let i = 0; i < n; i++) if (!ok[i]) { const a = i; while (i + 1 < n && !ok[i + 1]) i++; faltan.push(a === i ? `${a + 1}` : `${a + 1} a ${i + 1}`); }
+  return faltan;
+}
+function redibujarHoja(h, clave) {
+  h.overlay = dibujar({ ...h, respuestas: S.scan.respuestas.slice(h.off, h.off + h.c) }, clave.slice(h.off, h.off + h.c));
+}
 function pintarScan() {
   const box = $('#scanBox'); if (!box) return;
   actualizarEstudiante();
   const s = S.scan, p = prueba();
+  const lbl = $('#btnScan');
+  if (lbl && lbl.firstChild) lbl.firstChild.textContent = s && s.hojas?.length ? 'Escanear otra hoja de este estudiante ' : 'Escanear hoja con la cámara ';
   if (!s) { box.innerHTML = ''; return; }
-  if (s.cargando) { box.innerHTML = '<p class="cargando">Leyendo la hoja…</p>'; return; }
-  if (s.error) { box.innerHTML = `<p class="err">${esc(s.error)}</p>`; return; }
+  const aviso = s.cargando ? '<p class="cargando">Leyendo la hoja…</p>' : s.error ? `<p class="err">${esc(s.error)}</p>` : '';
+  if (!s.hojas?.length) { box.innerHTML = aviso; return; }
   const g = calificar(s.respuestas, p.clave, p.escala);
   const anuladas = s.respuestas.filter(x => x === '*').length;
-  box.innerHTML = `<hr style="border:0;border-top:1px solid var(--linea);margin:16px 0">
+  const faltan = cobertura(s, p.n);
+  const total = p.hoja === 'universal' || p.v !== 2 ? 0 : OMR.paginas(p.n, p.nOpt).length;
+  box.innerHTML = `<hr style="border:0;border-top:1px solid var(--linea);margin:16px 0">${aviso}
     <p class="estudiante">${esc(s.est.apellido)} ${esc(s.est.nombre)}</p>
+    ${faltan.length ? `<p class="aviso"><b>Falta escanear ${total > 1 ? `${total - s.hojas.length > 1 ? 'hojas' : 'una hoja'}` : 'otra hoja'}:</b> preguntas ${faltan.join(', ')}. Use el botón “Escanear otra hoja de este estudiante”. Si guarda así, esas preguntas quedan en blanco.</p>`
+      : s.hojas.length > 1 ? `<p class="estado ok">Hojas completas: ${s.hojas.length} de ${s.hojas.length}.</p>` : ''}
     <div class="nota"><div class="sello"><b>${g.nota.toFixed(1)}</b><span>de ${p.escala}</span></div>
       <div class="conteo"><div><b class="ok">${g.c}</b> buenas</div><div><b class="mal">${g.m}</b> malas</div>
       <div class="estado">${g.b} en blanco${anuladas ? `, ${anuladas} con doble marca` : ''}</div></div></div>
     <div class="acciones"><button class="btn pri" data-a="guardarRes">Guardar y seguir</button><button class="btn" data-a="descartar">Descartar</button></div>
-    <div class="foto"><img src="${s.overlay}" alt="Foto de la hoja con las marcas detectadas"></div>
+    ${s.hojas.map(h => `<div class="foto"><p class="estado" style="margin:10px 0 0">Preguntas ${h.off + 1} a ${h.off + h.c}</p><img src="${h.overlay}" alt="Foto de la hoja, preguntas ${h.off + 1} a ${h.off + h.c}, con las marcas detectadas"></div>`).join('')}
     <p class="estado">Verde: buena. Rojo: mala. Contorno verde: respuesta correcta no marcada. Si la lectura falló en alguna pregunta, corríjala tocando la opción.</p>
     ${grilla(p.n, p.nOpt, s.respuestas, 'marcaScan', p.clave)}
     <div class="acciones" style="margin-top:12px"><button class="btn pri" data-a="guardarRes">Guardar y seguir</button></div>`;
@@ -1008,14 +1078,14 @@ async function leerFoto(file, n, nOpt, v, opc) {
   const d = ctx.getImageData(0, 0, W, H).data, gray = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) gray[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
   const r = OMR.read(gray, W, H, n, nOpt, v, opc);
-  return { ...r, cv, W, H };
+  return { ...r, Hm: r.H, cv, W, H };
 }
 function dibujar(s, clave) {
   const c = document.createElement('canvas'); c.width = s.W; c.height = s.H;
   const x = c.getContext('2d'); x.drawImage(s.cv, 0, 0);
   const lw = Math.max(2, s.W / 450); x.lineWidth = lw;
   s.layout.q.forEach((q, i) => q.opts.forEach(([bx, by], o) => {
-    const [u, v] = OMR.apply(s.H, bx, by), [u2, v2] = OMR.apply(s.H, bx + s.layout.r, by);
+    const [u, v] = OMR.apply(s.Hm, bx, by), [u2, v2] = OMR.apply(s.Hm, bx + s.layout.r, by);
     const rp = Math.hypot(u2 - u, v2 - v) * 1.15, l = L[o], marcada = s.respuestas[i] === l || (s.respuestas[i] === '*' && s.fills[i][o] >= 0.3), esClave = clave[i] === l;
     x.beginPath(); x.arc(u, v, rp, 0, Math.PI * 2);
     if (marcada) { x.fillStyle = esClave ? 'rgba(46,125,79,.55)' : 'rgba(192,57,43,.55)'; x.fill(); }
@@ -1067,16 +1137,16 @@ function campo(x, y, etiqueta, valor, fin, wEtq) {
   else s += `<line x1="${x2}" y1="${y + 0.7}" x2="${fin}" y2="${y + 0.7}" stroke="#000" stroke-width=".25"/>`;
   return s;
 }
-function hojaSVG(p, est) {
+function hojaSVG(p, est, pg = pagUnica(p.n)) {
   if (p.v !== 2) return hojaSVGv1(p, est);
-  const Ly = OMR.layout(p.n, p.nOpt, 2);
+  const Ly = OMR.layout(pg.N, p.nOpt, 2);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
   s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
   OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
   const o = OMR.ORIENT; s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#000"/>`;
   if (p.colegio) s += textoAjustado(100, 9.6, p.colegio.toUpperCase(), 136, 3.6, 'font-weight="700" text-anchor="middle"');
   s += textoAjustado(100, 18.5, p.nombre || 'Nombre de la prueba', 170, 5.4, 'font-weight="700" text-anchor="middle"');
-  s += `<text x="100" y="24.2" font-size="2.9" text-anchor="middle" fill="#555" letter-spacing=".4">HOJA DE RESPUESTAS</text>`;
+  s += `<text x="100" y="24.2" font-size="2.9" text-anchor="middle" fill="#555" letter-spacing=".4">HOJA DE RESPUESTAS${pg.total > 1 ? ` · ${pg.idx + 1} DE ${pg.total} (PREGUNTAS ${pg.off + 1} A ${pg.off + pg.N})` : ''}</text>`;
   s += `<rect x="12" y="27.5" width="176" height="23.5" rx="2" fill="none" stroke="#000" stroke-width=".3"/>`;
   s += campo(15, 34, 'Materia:', p.materia, 98, 14);
   s += campo(102, 34, 'Docente:', p.docente, 185, 15);
@@ -1093,15 +1163,16 @@ function hojaSVG(p, est) {
   }
   const fs = Math.min(3.3, Ly.rowH * 0.45);
   Ly.q.forEach(q => {
-    s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num}</text>`;
+    s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num + pg.off}</text>`;
     q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width=".3"/>`);
   });
+  s += svgCodigo(pg.N, p.nOpt, pg.off);
   return s + '</svg>';
 }
 function imprimir(modo) {
   const p = prueba(), est = curso(p.cursoId)?.estudiantes || [];
   const lista = modo === 'nombres' ? est : [null];
-  $('#printArea').innerHTML = lista.map(e => `<div class="pagina">${hojaDePrueba(p, e)}</div>`).join('');
+  $('#printArea').innerHTML = lista.map(e => hojasDePrueba(p, e).map(h => `<div class="pagina">${h}</div>`).join('')).join('');
   setTimeout(() => window.print(), 50);
 }
 
@@ -1153,8 +1224,8 @@ const A = {
   },
   imprimirUni() {
     const cfg = cfgUniImprimir(), copias = Math.max(1, Math.min(200, parseInt($('#tCopias')?.value) || 1));
-    const pag = `<div class="pagina">${hojaUniversalSVG(cfg)}</div>`;
-    $('#printArea').innerHTML = pag.repeat(copias);
+    const juego = hojasUniversal(cfg).map(h => `<div class="pagina">${h}</div>`).join('');
+    $('#printArea').innerHTML = juego.repeat(copias);
     setTimeout(() => window.print(), 50);
   },
   verUni() { const v = $('#vistaUniT'); v.hidden = !v.hidden; if (!v.hidden) v.innerHTML = hojaUniversalSVG(cfgUniImprimir()); },
@@ -1249,12 +1320,14 @@ const A = {
   marcaScan(el) {
     const q = +el.dataset.q, s = S.scan;
     s.respuestas[q] = s.respuestas[q] === el.dataset.l ? '' : el.dataset.l;
-    s.overlay = dibujar(s, prueba().clave);
+    const h = s.hojas.find(h => q >= h.off && q < h.off + h.c); if (h) redibujarHoja(h, prueba().clave);
     const y = window.scrollY; pintarScan(); window.scrollTo(0, y);
   },
   descartar() { S.scan = null; pintarScan(); },
   async guardarRes() {
     const s = S.scan, p = prueba(), g = calificar(s.respuestas, p.clave, p.escala);
+    const faltan = cobertura(s, p.n);
+    if (faltan.length && !confirm(`Faltan las preguntas ${faltan.join(', ')} (otra hoja). ¿Guardar de todas formas? Esas preguntas quedan en blanco.`)) return;
     try {
       await setDoc(doc(db, ruta('pruebas', p.id, 'resultados', idSeguro(s.est.codigo))), {
         codigo: s.est.codigo, apellido: s.est.apellido, nombre: s.est.nombre, respuestas: s.respuestas,
@@ -1322,13 +1395,18 @@ document.addEventListener('change', async e => {
   if (t.id === 'scanInput' && t.files[0]) {
     const est = estudianteActual(), p = prueba(), file = t.files[0]; t.value = '';
     if (!est) return;
-    S.scan = { cargando: true, est }; pintarScan();
+    if (!S.scan || S.scan.est?.codigo !== est.codigo || !S.scan.hojas) S.scan = { est, hojas: [], respuestas: new Array(p.n).fill('') };
+    S.scan.cargando = true; S.scan.error = ''; pintarScan();
     await new Promise(r => setTimeout(r, 30));
     try {
       const r = await leerHoja(file, p);
-      S.scan = { ...r, est };
-      S.scan.overlay = dibujar(S.scan, p.clave);
-    } catch (err) { S.scan = { error: err.message, est }; }
+      const sc = S.scan;
+      sc.hojas = sc.hojas.filter(h => h.off !== r.off);   // si repite una hoja, se reemplaza
+      for (let i = 0; i < r.c; i++) sc.respuestas[r.off + i] = r.respuestas[i];
+      sc.hojas.push(r); sc.hojas.sort((a, b) => a.off - b.off);
+      redibujarHoja(r, p.clave);
+    } catch (err) { S.scan.error = err.message; }
+    S.scan.cargando = false;
     pintarScan();
   }
   if (t.id === 'scanClave' && t.files[0]) {
@@ -1336,8 +1414,10 @@ document.addEventListener('change', async e => {
     $('#claveErr').textContent = 'Leyendo la hoja…';
     try {
       const r = await leerHoja(file, S.form);
-      S.form.clave = r.respuestas.map(x => (x === '*' ? '' : x));
-      $('#claveErr').textContent = r.respuestas.includes('*') ? 'Algunas preguntas tenían doble marca; complételas a mano.' : '';
+      r.respuestas.forEach((x, i) => { S.form.clave[r.off + i] = x === '*' ? '' : x; });
+      const pend = S.form.clave.map((x, i) => x ? 0 : i + 1).filter(Boolean);
+      $('#claveErr').textContent = (r.respuestas.includes('*') ? 'Algunas preguntas tenían doble marca; complételas a mano. ' : '') +
+        (pend.length && r.off + r.c < S.form.n || r.off > 0 && pend.some(q => q <= r.off) ? `Se leyeron las preguntas ${r.off + 1} a ${r.off + r.c}. Escanee también la otra hoja de la clave.` : '');
       pintarClave();
     } catch (err) { $('#claveErr').textContent = err.message; }
   }
