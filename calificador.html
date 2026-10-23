@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calificador de hojas de respuestas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --papel:#F5F7FA; --hoja:#FFFFFF; --tinta:#1D3557; --grafito:#3B4048; --suave:#6B7480;
+  --linea:#D6DEE8; --rojo:#C0392B; --verde:#2E7D4F; --azul:#2F6FB3; --resalte:#E8F0FA;
+  --radio:10px; color-scheme:light;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root{ --papel:#12171E; --hoja:#1B222C; --tinta:#BFD4EE; --grafito:#E4E8EE; --suave:#98A2AF;
+    --linea:#2E3846; --rojo:#F07467; --verde:#5FC08A; --azul:#7FB2EA; --resalte:#223247; color-scheme:dark; }
+}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0}
+body{background:var(--papel);color:var(--grafito);font:16px/1.5 "Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px}
+header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:2px solid var(--tinta);background:var(--hoja)}
+header.top h1{font-size:1.15rem;margin:0;color:var(--tinta);flex:1}
+header.top .who{color:var(--suave);font-size:.9rem}
+h2{color:var(--tinta);font-size:1.4rem;margin:8px 0 12px}
+h3{color:var(--tinta);font-size:1.1rem;margin:0 0 8px}
+.tabs{display:flex;gap:4px;margin:16px 0}
+.tab{border:0;background:none;padding:8px 14px;font:inherit;color:var(--suave);border-bottom:3px solid transparent;cursor:pointer}
+.tab.on{color:var(--tinta);border-color:var(--tinta);font-weight:700}
+.panel{background:var(--hoja);border:1px solid var(--linea);border-radius:var(--radio);padding:16px;margin-bottom:16px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+.row>*{flex:1 1 180px}
+label.f{display:block;font-size:.9rem;color:var(--suave);margin-bottom:10px}
+label.f>input,label.f>select,label.f>textarea{display:block;width:100%;margin-top:4px}
+input,select,textarea{font:inherit;color:var(--grafito);background:var(--papel);border:1px solid var(--linea);border-radius:8px;padding:9px 10px}
+textarea{min-height:110px;resize:vertical}
+input:focus,select:focus,textarea:focus,button:focus-visible,.btn:focus-visible{outline:3px solid var(--azul);outline-offset:1px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font:inherit;font-weight:700;padding:9px 14px;border-radius:8px;border:1px solid var(--linea);background:var(--hoja);color:var(--tinta);cursor:pointer;text-decoration:none}
+.btn.pri{background:var(--tinta);border-color:var(--tinta);color:var(--hoja)}
+.btn.big{padding:14px 18px;font-size:1.05rem;width:100%}
+.btn.peligro{color:var(--rojo)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.acciones{display:flex;gap:8px;flex-wrap:wrap}
+.lista{list-style:none;margin:0;padding:0}
+.lista li{display:flex;align-items:center;gap:12px;padding:12px 4px;border-bottom:1px solid var(--linea);cursor:pointer}
+.lista li:last-child{border:0}
+.lista .t{flex:1}
+.lista .t b{color:var(--tinta);display:block}
+.lista .t small{color:var(--suave)}
+.vacio{color:var(--suave);padding:18px 4px}
+.tabla{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.95rem}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--linea);white-space:nowrap}
+th{color:var(--suave);font-weight:400;font-size:.85rem}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.ok{color:var(--verde)} .mal{color:var(--rojo)}
+.estado{font-size:.85rem;color:var(--suave)}
+.err{color:var(--rojo);margin:8px 0}
+.aviso{background:var(--resalte);border-radius:8px;padding:10px 12px;margin:8px 0;font-size:.95rem}
+/* grilla de respuestas */
+.grilla{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:2px 14px}
+.preg{display:flex;align-items:center;gap:4px;padding:3px 0}
+.preg .num{width:26px;text-align:right;color:var(--suave);font-size:.85rem;font-variant-numeric:tabular-nums;margin-right:4px}
+.burb{width:28px;height:28px;border-radius:50%;border:1.5px solid var(--suave);background:transparent;color:var(--suave);font:700 .78rem/1 inherit;cursor:pointer;padding:0}
+.burb.on{background:var(--tinta);border-color:var(--tinta);color:var(--hoja)}
+.burb.clave{box-shadow:0 0 0 2px var(--verde)}
+.preg.bien .num{color:var(--verde);font-weight:700}
+.preg.malo .num{color:var(--rojo);font-weight:700}
+/* resultado */
+.nota{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:6px 0 14px}
+.sello{width:112px;height:112px;border:4px solid var(--rojo);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--rojo);transform:rotate(-6deg);flex:0 0 auto}
+.sello b{font-size:2.1rem;line-height:1}
+.sello span{font-size:.8rem}
+.conteo{font-size:1.05rem}
+.conteo b{font-size:1.5rem}
+.foto img{max-width:100%;max-height:70vh;display:block;margin:10px auto;border-radius:6px;border:1px solid var(--linea)}
+.estudiante{font-size:1.15rem;color:var(--tinta);font-weight:700;margin:4px 0}
+.cargando{color:var(--suave);padding:10px 0}
+#printArea{display:none}
+@media print{
+  @page{size:auto;margin:8mm}
+  body{background:#fff}
+  body>*:not(#printArea){display:none!important}
+  #printArea{display:block}
+  .pagina{page-break-after:always;break-after:page;display:flex;justify-content:center}
+  .pagina:last-child{page-break-after:auto;break-after:auto}
+  .pagina svg{width:190mm;height:247mm}
+}
+</style>
+</head>
+<body>
+<div id="app"><div class="wrap cargando">Cargando…</div></div>
+<div id="printArea"></div>
+<script>
+const OMR = (() => {
+  const SHEET_W = 200, SHEET_H = 260, MARK = 8;
+  // Orden: superior izq, superior der, inferior der, inferior izq
+  const MARK_TL = [[4, 4], [188, 4], [188, 248], [4, 248]];
+  const MARK_C = MARK_TL.map(([x, y]) => [x + MARK / 2, y + MARK / 2]);
+  const ORIENT = { x: 16, y: 6, w: 22, h: 4 };
+  const LETRAS = 'ABCDE';
+
+  function layout(n, nOpt) {
+    const cols = Math.max(1, Math.ceil(n / 25));
+    const rows = Math.ceil(n / cols);
+    const top = 66, bottom = 244, left = 12, right = 188;
+    const rowH = Math.min(9, (bottom - top) / rows);
+    const colW = (right - left) / cols;
+    const optW = Math.min(8, (colW - 11) / nOpt);
+    const r = Math.min(2.7, optW * 0.4, rowH * 0.38);
+    const q = [];
+    for (let i = 0; i < n; i++) {
+      const c = Math.floor(i / rows), rr = i % rows;
+      const x0 = left + c * colW, y = top + rr * rowH + rowH / 2;
+      const opts = [];
+      for (let o = 0; o < nOpt; o++) opts.push([x0 + 11 + o * optW + optW / 2, y]);
+      q.push({ num: i + 1, numX: x0 + 8, y, opts });
+    }
+    return { cols, rows, rowH, colW, optW, r, top, left, q };
+  }
+
+  function solve(A, b) {
+    const n = b.length, M = A.map((row, i) => [...row, b[i]]);
+    for (let c = 0; c < n; c++) {
+      let p = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      [M[c], M[p]] = [M[p], M[c]];
+      if (Math.abs(M[c][c]) < 1e-12) return null;
+      for (let r = 0; r < n; r++) {
+        if (r === c) continue;
+        const f = M[r][c] / M[c][c];
+        for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+      }
+    }
+    return M.map((row, i) => row[n] / row[i]);
+  }
+
+  function homography(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = src[i], [u, v] = dst[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+    }
+    const h = solve(A, b);
+    return h ? [...h, 1] : null;
+  }
+
+  function apply(H, x, y) {
+    const w = H[6] * x + H[7] * y + 1;
+    return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w];
+  }
+
+  function binarize(gray, W, H) {
+    const W1 = W + 1, I = new Float64Array(W1 * (H + 1));
+    for (let y = 0; y < H; y++) {
+      let s = 0;
+      for (let x = 0; x < W; x++) {
+        s += gray[y * W + x];
+        I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + s;
+      }
+    }
+    const half = Math.max(8, Math.round(Math.max(W, H) / 18));
+    const bin = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      const y0 = Math.max(0, y - half), y1 = Math.min(H, y + half + 1);
+      for (let x = 0; x < W; x++) {
+        const x0 = Math.max(0, x - half), x1 = Math.min(W, x + half + 1);
+        const sum = I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0];
+        const mean = sum / ((x1 - x0) * (y1 - y0));
+        bin[y * W + x] = gray[y * W + x] < mean * 0.75 ? 1 : 0;
+      }
+    }
+    return bin;
+  }
+
+  function components(bin, W, H) {
+    const lab = new Int32Array(W * H), stack = new Int32Array(W * H), comps = [];
+    let id = 0;
+    for (let p = 0; p < W * H; p++) {
+      if (!bin[p] || lab[p]) continue;
+      id++;
+      let sp = 0; stack[sp++] = p; lab[p] = id;
+      const c = { n: 0, minx: W, miny: H, maxx: 0, maxy: 0, sx: 0, sy: 0 };
+      while (sp) {
+        const q = stack[--sp], x = q % W, y = (q - x) / W;
+        c.n++; c.sx += x; c.sy += y;
+        if (x < c.minx) c.minx = x; if (x > c.maxx) c.maxx = x;
+        if (y < c.miny) c.miny = y; if (y > c.maxy) c.maxy = y;
+        if (x > 0 && bin[q - 1] && !lab[q - 1]) { lab[q - 1] = id; stack[sp++] = q - 1; }
+        if (x < W - 1 && bin[q + 1] && !lab[q + 1]) { lab[q + 1] = id; stack[sp++] = q + 1; }
+        if (y > 0 && bin[q - W] && !lab[q - W]) { lab[q - W] = id; stack[sp++] = q - W; }
+        if (y < H - 1 && bin[q + W] && !lab[q + W]) { lab[q + W] = id; stack[sp++] = q + W; }
+      }
+      c.cx = c.sx / c.n; c.cy = c.sy / c.n;
+      comps.push(c);
+    }
+    return comps;
+  }
+
+  function findMarkers(bin, W, H) {
+    const m = Math.min(W, H), minS = m * 0.015, maxS = m * 0.12;
+    const cands = components(bin, W, H).filter(c => {
+      const w = c.maxx - c.minx + 1, h = c.maxy - c.miny + 1;
+      if (w < minS || h < minS || w > maxS || h > maxS) return false;
+      const ar = w / h;
+      return ar > 0.6 && ar < 1.67 && c.n / (w * h) > 0.6;
+    });
+    const corners = [[0, 0], [W, 0], [W, H], [0, H]];
+    const pts = corners.map(([X, Y]) => {
+      let best = null, bd = Infinity;
+      for (const c of cands) {
+        const inQ = (X === 0 ? c.cx < W / 2 : c.cx >= W / 2) && (Y === 0 ? c.cy < H / 2 : c.cy >= H / 2);
+        if (!inQ) continue;
+        const d = Math.hypot(c.cx - X, c.cy - Y);
+        if (d < bd) { bd = d; best = c; }
+      }
+      return best;
+    });
+    if (pts.some(p => !p)) return null;
+    const areas = pts.map(p => p.n).sort((a, b) => a - b);
+    const med = (areas[1] + areas[2]) / 2;
+    if (pts.some(p => p.n < med * 0.35 || p.n > med * 2.8)) return null;
+    return pts.map(p => [p.cx, p.cy]);
+  }
+
+  function sampleFill(bin, W, H, Hm, cx, cy, rad) {
+    let d = 0, t = 0; const st = 6;
+    for (let i = -st; i <= st; i++) for (let j = -st; j <= st; j++) {
+      const dx = i / st * rad, dy = j / st * rad;
+      if (dx * dx + dy * dy > rad * rad) continue;
+      const [u, v] = apply(Hm, cx + dx, cy + dy);
+      const x = Math.round(u), y = Math.round(v);
+      t++;
+      if (x >= 0 && y >= 0 && x < W && y < H && bin[y * W + x]) d++;
+    }
+    return t ? d / t : 0;
+  }
+
+  function sampleRect(bin, W, H, Hm, r) {
+    let d = 0, t = 0;
+    for (let i = 1; i < 12; i++) for (let j = 1; j < 4; j++) {
+      const [u, v] = apply(Hm, r.x + r.w * i / 12, r.y + r.h * j / 4);
+      const x = Math.round(u), y = Math.round(v);
+      t++;
+      if (x >= 0 && y >= 0 && x < W && y < H && bin[y * W + x]) d++;
+    }
+    return d / t;
+  }
+
+  function decide(f) {
+    const idx = f.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+    const m1 = idx[0][0], m2 = idx[1] ? idx[1][0] : 0;
+    if (m1 < 0.3) return '';
+    if (m2 >= 0.3 && m2 > m1 * 0.6) return '*';
+    return LETRAS[idx[0][1]];
+  }
+
+  function read(gray, W, H, n, nOpt) {
+    const bin = binarize(gray, W, H);
+    const P = findMarkers(bin, W, H);
+    if (!P) throw new Error('No se encontraron los cuatro cuadros negros de las esquinas. Tome la foto de frente, con la hoja completa y buena luz.');
+    let best = null;
+    for (let k = 0; k < 4; k++) {
+      const dst = [0, 1, 2, 3].map(i => P[(i + k) % 4]);
+      const Hm = homography(MARK_C, dst);
+      if (!Hm) continue;
+      const s = sampleRect(bin, W, H, Hm, ORIENT);
+      if (!best || s > best.s) best = { Hm, s };
+    }
+    if (!best || best.s < 0.5) throw new Error('No se reconoce la hoja de respuestas. Verifique que sea una hoja impresa desde esta aplicación.');
+    const L = layout(n, nOpt);
+    const fills = L.q.map(q => q.opts.map(([x, y]) => sampleFill(bin, W, H, best.Hm, x, y, L.r * 0.62)));
+    return { respuestas: fills.map(decide), fills, H: best.Hm, layout: L, markers: P };
+  }
+
+  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, homography, apply, read };
+})();
+</script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, doc, setDoc, addDoc, deleteDoc, updateDoc, onSnapshot, serverTimestamp, query, orderBy, getDocs, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+/* ============================================================
+   CONFIGURACIÓN DE FIREBASE
+   Pegue aquí el objeto que le da Firebase (Configuración del
+   proyecto → Tus apps → Web). Si lo deja en null, la app le
+   pedirá la configuración la primera vez y la guardará en el
+   navegador.
+   ============================================================ */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCgmA0IIogsmhXdzJDNaZ85Otx-8oVV1GI",
+  authDomain: "calificador-42bb5.firebaseapp.com",
+  projectId: "calificador-42bb5",
+  storageBucket: "calificador-42bb5.firebasestorage.app",
+  messagingSenderId: "794498416083",
+  appId: "1:794498416083:web:4ab1a9f4a7828c14490326"
+};
+/* Ejemplo:
+const FIREBASE_CONFIG = {
+  apiKey: "AIza...",
+  authDomain: "mi-colegio.firebaseapp.com",
+  projectId: "mi-colegio",
+  storageBucket: "mi-colegio.appspot.com",
+  messagingSenderId: "123456",
+  appId: "1:123456:web:abcdef"
+};
+*/
+const NOMBRE_COLEGIO = "";
+const SUPERADMIN = "admin@calificador.com";   // única cuenta que crea y administra profesores   // opcional: aparece en la hoja impresa
+
+const $ = s => document.querySelector(s);
+const app = $('#app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+const idSeguro = s => String(s).trim().replace(/[\/]/g, '_').replace(/^\.+$/, '_');
+const L = OMR.LETRAS;
+
+let auth, db;
+const S = { user: null, view: 'pruebas', cursos: [], pruebas: [], resultados: {}, pruebaId: null, form: null, scan: null, unsub: [], unsubRes: null, msg: '' };
+
+/* ---------------- arranque ---------------- */
+function leerConfig() {
+  if (FIREBASE_CONFIG) return FIREBASE_CONFIG;
+  try { const c = localStorage.getItem('fbconfig'); return c ? JSON.parse(c) : null; } catch { return null; }
+}
+function parseConfig(txt) {
+  let t = txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1);
+  t = t.replace(/'/g, '"').replace(/([{,]\s*)([A-Za-z_]\w*)\s*:/g, '$1"$2":').replace(/,\s*}/g, '}');
+  const c = JSON.parse(t);
+  if (!c.apiKey || !c.projectId) throw new Error('Falta apiKey o projectId');
+  return c;
+}
+function iniciar() {
+  const cfg = leerConfig();
+  if (!cfg) return vistaConfig();
+  try {
+    const fb = initializeApp(cfg);
+    auth = getAuth(fb); db = getFirestore(fb);
+  } catch (e) { return vistaConfig('La configuración no es válida: ' + e.message); }
+  onAuthStateChanged(auth, async u => {
+    S.unsub.forEach(f => f()); S.unsub = [];
+    if (S.unsubRes) { S.unsubRes(); S.unsubRes = null; }
+    S.user = u;
+    if (!u) return vistaLogin();
+    if (esAdmin()) { S.view = 'admin'; escucharAdmin(); return render(); }
+    try {
+      const perfil = await getDoc(doc(db, 'profesores', u.uid));
+      if (!perfil.exists() || perfil.data().activo !== true) {
+        await signOut(auth);
+        return vistaLogin('Su cuenta no está habilitada. Comuníquese con el administrador.');
+      }
+      S.perfil = perfil.data();
+    } catch (e) { await signOut(auth); return vistaLogin('No se pudo verificar la cuenta: ' + e.message); }
+    S.view = 'pruebas';
+    escuchar();
+    render();
+  });
+}
+function vistaConfig(error = '') {
+  app.innerHTML = `<div class="wrap" style="max-width:640px">
+    <h2>Conectar con Firebase</h2>
+    <div class="panel">
+      <p>Pegue la configuración web de su proyecto de Firebase (Configuración del proyecto → Tus apps → Web).</p>
+      <label class="f">Configuración<textarea id="cfgTxt" placeholder='const firebaseConfig = { apiKey: "...", projectId: "..." }'></textarea></label>
+      ${error ? `<p class="err">${esc(error)}</p>` : ''}
+      <button class="btn pri" data-a="guardarConfig">Guardar y continuar</button>
+    </div></div>`;
+}
+function vistaLogin(error = '', info = '') {
+  app.innerHTML = `<div class="wrap" style="max-width:440px;padding-top:8vh">
+    <h2>Calificador de hojas de respuestas</h2>
+    <div class="panel">
+      <label class="f">Correo<input id="lgEmail" type="email" autocomplete="username"></label>
+      <label class="f">Contraseña<input id="lgPass" type="password" autocomplete="current-password"></label>
+      ${error ? `<p class="err">${esc(error)}</p>` : ''}${info ? `<p class="aviso">${esc(info)}</p>` : ''}
+      <div class="acciones"><button class="btn pri" data-a="entrar">Ingresar</button>
+      <button class="btn" data-a="olvide">Olvidé mi contraseña</button></div>
+    </div></div>`;
+}
+const errAuth = e => ({
+  'auth/invalid-credential': 'Correo o contraseña incorrectos.', 'auth/wrong-password': 'Contraseña incorrecta.',
+  'auth/user-not-found': 'No existe una cuenta con ese correo.', 'auth/email-already-in-use': 'Ya existe una cuenta con ese correo.',
+  'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.', 'auth/invalid-email': 'El correo no es válido.', 'auth/too-many-requests': 'Demasiados intentos. Espere unos minutos.'
+}[e.code] || e.message);
+
+/* ---------------- datos ---------------- */
+const ruta = (...p) => ['users', S.user.uid, ...p].join('/');
+function escuchar() {
+  S.unsub.push(onSnapshot(query(collection(db, ruta('cursos')), orderBy('nombre')), snap => {
+    S.cursos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (['pruebas', 'cursos'].includes(S.view)) render();
+  }, e => mostrarError(e)));
+  S.unsub.push(onSnapshot(query(collection(db, ruta('pruebas')), orderBy('creada', 'desc')), snap => {
+    S.pruebas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (['pruebas', 'cursos'].includes(S.view)) render();
+    else if (S.view === 'prueba') actualizarPrueba();
+  }, e => mostrarError(e)));
+}
+function mostrarError(e) {
+  console.error(e);
+  S.msg = e.code === 'permission-denied' ? 'Firebase rechazó el acceso. Revise las reglas de Firestore.' : 'Error: ' + e.message;
+  render();
+}
+const curso = id => S.cursos.find(c => c.id === id);
+const prueba = () => S.pruebas.find(p => p.id === S.pruebaId);
+
+function calificar(resp, clave, escala) {
+  let c = 0, b = 0, total = 0;
+  clave.forEach((k, q) => {
+    if (!k) return; total++;
+    const r = resp?.[q] || '';
+    if (r === k) c++; else if (r === '') b++;
+  });
+  const nota = total ? Math.round(c / total * escala * 10) / 10 : 0;
+  return { c, m: total - c, b, total, nota };
+}
+
+/* ---------------- superadmin ---------------- */
+const esAdmin = () => S.user && (S.user.email || '').toLowerCase() === SUPERADMIN;
+let _authSec = null;
+function authSecundaria() {
+  // Segunda instancia de Firebase: crea cuentas sin cerrar la sesión del administrador
+  if (!_authSec) _authSec = getAuth(initializeApp(leerConfig(), 'creador-cuentas'));
+  return _authSec;
+}
+function escucharAdmin() {
+  S.unsub.push(onSnapshot(query(collection(db, 'profesores'), orderBy('nombre')), snap => {
+    S.profes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (S.view === 'admin') render();
+  }, e => mostrarError(e)));
+}
+function vAdmin() {
+  const m = S.adminMsg || {}, lista = S.profes || [];
+  const filas = lista.map(p => `<tr><td>${esc(p.nombre)}</td><td>${esc(p.email)}</td>
+    <td class="${p.activo ? 'ok' : 'mal'}">${p.activo ? 'Activa' : 'Desactivada'}</td>
+    <td><button class="btn" data-a="resetProfesor" data-id="${p.id}">Enviar cambio de contraseña</button>
+    <button class="btn ${p.activo ? 'peligro' : ''}" data-a="alternarProfesor" data-id="${p.id}">${p.activo ? 'Desactivar' : 'Activar'}</button></td></tr>`).join('');
+  return `<h2>Administración de cuentas</h2>
+  <div class="panel"><h3>Crear cuenta de profesor</h3>
+    <div class="row">
+      <label class="f">Nombre completo<input id="aNombre" autocomplete="off"></label>
+      <label class="f">Correo<input id="aEmail" type="email" autocomplete="off"></label>
+      <label class="f">Contraseña temporal<input id="aPass" autocomplete="off"></label>
+    </div>
+    <div class="acciones"><button class="btn" data-a="generarClave">Generar contraseña</button>
+    <button class="btn pri" data-a="crearProfesor">Crear cuenta</button></div>
+    ${m.err ? `<p class="err">${esc(m.err)}</p>` : ''}${m.ok ? `<p class="aviso">${esc(m.ok)}</p>` : ''}
+  </div>
+  <div class="panel"><h3>Profesores (${lista.length})</h3>
+    ${filas ? `<div class="tabla"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Cuenta</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>`
+      : '<p class="vacio">Todavía no hay profesores. Cree la primera cuenta con el formulario.</p>'}
+  </div>`;
+}
+
+/* ---------------- vistas ---------------- */
+function marco(contenido) {
+  return `<header class="top"><h1>Calificador de hojas de respuestas</h1>
+    <span class="who">${esc(esAdmin() ? 'Administrador' : (S.perfil?.nombre || S.user.email))}</span><button class="btn" data-a="salir">Salir</button></header>
+    <div class="wrap">${S.msg ? `<p class="err">${esc(S.msg)}</p>` : ''}${contenido}</div>`;
+}
+function render() {
+  const v = { admin: vAdmin, pruebas: vPruebas, cursos: vCursos, curso: vCursoForm, pruebaForm: vPruebaForm, prueba: vPrueba }[S.view] || vPruebas;
+  app.innerHTML = marco(v());
+  if (S.view === 'prueba') { actualizarPrueba(); pintarScan(); }
+  if (S.view === 'pruebaForm') pintarClave();
+}
+const tabs = () => `<div class="tabs" role="tablist">
+  <button class="tab ${S.view === 'pruebas' ? 'on' : ''}" data-a="ir" data-v="pruebas">Pruebas</button>
+  <button class="tab ${S.view === 'cursos' ? 'on' : ''}" data-a="ir" data-v="cursos">Cursos y estudiantes</button></div>`;
+
+function vPruebas() {
+  const items = S.pruebas.map(p => `<li data-a="abrirPrueba" data-id="${p.id}"><div class="t"><b>${esc(p.nombre)}</b>
+    <small>${esc(p.cursoNombre || 'Sin curso')}, ${p.n} preguntas</small></div><span class="btn">Abrir</span></li>`).join('');
+  return tabs() + `<div class="panel">
+    <div class="acciones" style="justify-content:space-between;align-items:center"><h3 style="margin:0">Mis pruebas</h3>
+    <button class="btn pri" data-a="nuevaPrueba" ${S.cursos.length ? '' : 'disabled'}>Nueva prueba</button></div>
+    ${!S.cursos.length ? `<p class="aviso">Primero cree un curso y cargue el listado de estudiantes en “Cursos y estudiantes”.</p>` : ''}
+    ${items ? `<ul class="lista">${items}</ul>` : `<p class="vacio">Aún no tiene pruebas. Cree una para definir la clave e imprimir las hojas.</p>`}</div>`;
+}
+function vCursos() {
+  const items = S.cursos.map(c => `<li data-a="editarCurso" data-id="${c.id}"><div class="t"><b>${esc(c.nombre)}</b>
+    <small>${(c.estudiantes || []).length} estudiantes</small></div><span class="btn">Editar</span></li>`).join('');
+  return tabs() + `<div class="panel">
+    <div class="acciones" style="justify-content:space-between;align-items:center"><h3 style="margin:0">Mis cursos</h3>
+    <button class="btn pri" data-a="nuevoCurso">Nuevo curso</button></div>
+    ${items ? `<ul class="lista">${items}</ul>` : `<p class="vacio">Cree un curso y suba el listado de estudiantes desde Excel o CSV.</p>`}</div>`;
+}
+
+/* ---- curso: crear / editar e importar listado ---- */
+function vCursoForm() {
+  const f = S.form;
+  const filas = f.estudiantes.slice(0, 200).map(e => `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)}</td><td>${esc(e.nombre)}</td></tr>`).join('');
+  return `<p><button class="btn" data-a="ir" data-v="cursos">Volver</button></p>
+  <h2>${f.id ? 'Editar curso' : 'Nuevo curso'}</h2>
+  <div class="panel">
+    <label class="f">Nombre del curso<input id="cNombre" value="${esc(f.nombre)}" placeholder="Ej.: 7°A Matemáticas"></label>
+    <h3>Listado de estudiantes</h3>
+    <p class="estado">Suba un archivo Excel o CSV con columnas <b>Código</b> (o documento), <b>Apellido</b> y <b>Nombre</b>. También puede pegar desde Excel.</p>
+    <div class="row">
+      <label class="f">Archivo (.xlsx, .xls, .csv)<input type="file" id="cArchivo" accept=".xlsx,.xls,.csv"></label>
+    </div>
+    <label class="f">O pegue aquí (una fila por estudiante: código, apellido, nombre)<textarea id="cPegar" placeholder="1023456789	Pérez Gómez	Ana María"></textarea></label>
+    <button class="btn" data-a="leerPegado">Usar texto pegado</button>
+    ${f.error ? `<p class="err">${esc(f.error)}</p>` : ''}
+    <p><b>${f.estudiantes.length}</b> estudiantes en el listado.</p>
+    ${filas ? `<div class="tabla"><table><thead><tr><th>Código</th><th>Apellido</th><th>Nombre</th></tr></thead><tbody>${filas}</tbody></table></div>` : ''}
+  </div>
+  <div class="acciones"><button class="btn pri" data-a="guardarCurso">Guardar curso</button>
+  ${f.id ? `<button class="btn peligro" data-a="borrarCurso">Eliminar curso</button>` : ''}</div>`;
+}
+function filasAEstudiantes(rows) {
+  rows = rows.filter(r => r && r.some(c => String(c ?? '').trim() !== ''));
+  if (!rows.length) return [];
+  let iC = 0, iA = 1, iN = 2, inicio = 0;
+  const h = rows[0].map(norm);
+  if (h.some(x => /cod|doc|ident|apell|nomb/.test(x))) {
+    inicio = 1;
+    iC = h.findIndex(x => /cod|doc|ident|tarjeta/.test(x));
+    iA = h.findIndex(x => /apell/.test(x));
+    iN = h.findIndex((x, i) => /nomb/.test(x) && i !== iA);
+    if (iC < 0) iC = 0;
+  } else if (rows[0].length === 2) { iA = -1; iN = 1; }
+  const vistos = new Set(), out = [];
+  for (const r of rows.slice(inicio)) {
+    const codigo = String(r[iC] ?? '').trim().replace(/\.0$/, '');
+    if (!codigo || vistos.has(codigo)) continue;
+    vistos.add(codigo);
+    out.push({ codigo, apellido: iA >= 0 ? String(r[iA] ?? '').trim() : '', nombre: iN >= 0 ? String(r[iN] ?? '').trim() : '' });
+  }
+  return out.sort((a, b) => (a.apellido + a.nombre).localeCompare(b.apellido + b.nombre, 'es'));
+}
+
+/* ---- prueba: crear / editar ---- */
+function vPruebaForm() {
+  const f = S.form;
+  return `<p><button class="btn" data-a="${f.id ? 'abrirPrueba' : 'ir'}" data-id="${f.id || ''}" data-v="pruebas">Volver</button></p>
+  <h2>${f.id ? 'Editar prueba' : 'Nueva prueba'}</h2>
+  <div class="panel">
+    <label class="f">Nombre de la prueba<input id="pNombre" value="${esc(f.nombre)}" placeholder="Ej.: Evaluación periodo 3"></label>
+    <div class="row">
+      <label class="f">Curso<select id="pCurso">${S.cursos.map(c => `<option value="${c.id}" ${c.id === f.cursoId ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></label>
+      <label class="f">Número de preguntas<input id="pN" type="number" min="1" max="100" value="${f.n}"></label>
+      <label class="f">Opciones por pregunta<select id="pOpt"><option value="4" ${f.nOpt == 4 ? 'selected' : ''}>4 (A–D)</option><option value="5" ${f.nOpt == 5 ? 'selected' : ''}>5 (A–E)</option></select></label>
+      <label class="f">Nota máxima<input id="pEscala" type="number" min="1" step="0.1" value="${f.escala}"></label>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>Clave de respuestas</h3>
+    <p class="estado">Toque la opción correcta de cada pregunta, escriba la clave seguida (ej.: ABDCA…) o escanee una hoja llena con las respuestas correctas.</p>
+    <div class="row">
+      <label class="f">Clave escrita<input id="pClaveTxt" placeholder="ABCDA…" autocapitalize="characters"></label>
+      <div class="acciones" style="flex:0 0 auto;margin-bottom:10px"><button class="btn" data-a="claveTexto">Aplicar</button>
+      <label class="btn">Escanear clave<input type="file" accept="image/*" capture="environment" id="scanClave" hidden></label></div>
+    </div>
+    <p class="err" id="claveErr"></p>
+    <div id="claveGrid"></div>
+  </div>
+  <div class="acciones"><button class="btn pri" data-a="guardarPrueba">Guardar prueba</button>
+  ${f.id ? `<button class="btn peligro" data-a="borrarPrueba">Eliminar prueba</button>` : ''}</div>`;
+}
+function grilla(n, nOpt, valores, accion, clave) {
+  let h = '<div class="grilla">';
+  for (let q = 0; q < n; q++) {
+    const v = valores[q] || '', k = clave ? clave[q] : '';
+    const cls = clave && k ? (v === k ? 'bien' : 'malo') : '';
+    h += `<div class="preg ${cls}"><span class="num">${q + 1}</span>`;
+    for (let o = 0; o < nOpt; o++) {
+      const l = L[o];
+      h += `<button class="burb ${v === l ? 'on' : ''} ${clave && k === l ? 'clave' : ''}" data-a="${accion}" data-q="${q}" data-l="${l}" aria-label="Pregunta ${q + 1}, opción ${l}">${l}</button>`;
+    }
+    h += `</div>`;
+  }
+  return h + '</div>';
+}
+function pintarClave() {
+  const f = S.form, el = $('#claveGrid');
+  if (el) el.innerHTML = grilla(f.n, f.nOpt, f.clave, 'marcaClave');
+}
+function leerFormPrueba() {
+  const f = S.form;
+  f.nombre = $('#pNombre').value.trim();
+  f.cursoId = $('#pCurso').value;
+  f.n = Math.max(1, Math.min(100, parseInt($('#pN').value) || 1));
+  f.nOpt = parseInt($('#pOpt').value);
+  f.escala = parseFloat($('#pEscala').value) || 5;
+  f.clave = Array.from({ length: f.n }, (_, i) => (L.slice(0, f.nOpt).includes(f.clave[i]) ? f.clave[i] : ''));
+}
+
+/* ---- prueba: tablero de calificación ---- */
+function vPrueba() {
+  const p = prueba(); if (!p) return '<p class="vacio">La prueba no existe.</p>';
+  const c = curso(p.cursoId);
+  const faltaClave = p.clave.filter(Boolean).length < p.n;
+  const opts = (c?.estudiantes || []).map(e => `<option value="${esc(e.codigo)}">${esc(e.apellido)} ${esc(e.nombre)}</option>`).join('');
+  return `<p><button class="btn" data-a="ir" data-v="pruebas">Volver a mis pruebas</button></p>
+  <h2>${esc(p.nombre)}</h2>
+  <p class="estado">${esc(c?.nombre || 'Curso eliminado')}, ${p.n} preguntas, opciones ${L.slice(0, p.nOpt).split('').join(', ')}, nota sobre ${p.escala}</p>
+  ${faltaClave ? `<p class="aviso">La clave tiene preguntas sin respuesta correcta; esas preguntas no se califican.</p>` : ''}
+  <div class="acciones" style="margin-bottom:16px">
+    <button class="btn" data-a="imprimir" data-modo="blanco">Imprimir hoja en blanco</button>
+    <button class="btn" data-a="imprimir" data-modo="nombres">Imprimir hojas con nombres</button>
+    <button class="btn" data-a="editarPrueba">Editar clave</button>
+    <button class="btn pri" data-a="exportar">Exportar a Excel</button>
+  </div>
+  <div class="panel">
+    <h3>Calificar</h3>
+    <label class="f">Código o documento del estudiante
+      <input id="codInput" list="estList" autocomplete="off" inputmode="search" placeholder="Escriba o elija de la lista"></label>
+    <datalist id="estList">${opts}</datalist>
+    <div id="estInfo"></div>
+    <label class="btn pri big" id="btnScan" aria-disabled="true">Escanear hoja con la cámara
+      <input type="file" accept="image/*" capture="environment" id="scanInput" hidden></label>
+    <div id="scanBox"></div>
+  </div>
+  <div class="panel"><div id="resumen"></div><div class="tabla" id="tabla"></div></div>`;
+}
+function actualizarPrueba() {
+  const p = prueba(); if (!p || !$('#tabla')) return;
+  const est = curso(p.cursoId)?.estudiantes || [];
+  let hechos = 0, suma = 0;
+  const filas = est.map(e => {
+    const r = S.resultados[e.codigo];
+    if (!r) return `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)} ${esc(e.nombre)}</td><td colspan="3" class="estado">Sin calificar</td><td><button class="btn" data-a="elegir" data-cod="${esc(e.codigo)}">Calificar</button></td></tr>`;
+    const g = calificar(r.respuestas, p.clave, p.escala); hechos++; suma += g.nota;
+    return `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)} ${esc(e.nombre)}</td><td class="n ok">${g.c}</td><td class="n mal">${g.m}</td><td class="n"><b>${g.nota.toFixed(1)}</b></td>
+      <td><button class="btn" data-a="elegir" data-cod="${esc(e.codigo)}">Repetir</button> <button class="btn peligro" data-a="borrarRes" data-cod="${esc(e.codigo)}" aria-label="Borrar resultado">Borrar</button></td></tr>`;
+  }).join('');
+  $('#resumen').innerHTML = `<h3>Resultados</h3><p class="estado">${hechos} de ${est.length} calificados${hechos ? `, promedio ${(suma / hechos).toFixed(1)}` : ''}</p>`;
+  $('#tabla').innerHTML = est.length ? `<table><thead><tr><th>Código</th><th>Estudiante</th><th>Buenas</th><th>Malas</th><th>Nota</th><th></th></tr></thead><tbody>${filas}</tbody></table>` : '<p class="vacio">El curso no tiene estudiantes.</p>';
+}
+function estudianteActual() {
+  const p = prueba(), inp = $('#codInput'); if (!p || !inp) return null;
+  const v = inp.value.trim();
+  return (curso(p.cursoId)?.estudiantes || []).find(e => e.codigo === v) || null;
+}
+function actualizarEstudiante() {
+  const e = estudianteActual(), info = $('#estInfo'), btn = $('#btnScan'), inp = $('#codInput');
+  if (!info) return;
+  const v = inp.value.trim();
+  btn.setAttribute('aria-disabled', e ? 'false' : 'true');
+  btn.style.opacity = e ? 1 : .45; $('#scanInput').disabled = !e;
+  if (e) {
+    const r = S.resultados[e.codigo];
+    info.innerHTML = `<p class="estudiante">${esc(e.apellido)} ${esc(e.nombre)}</p>${r ? '<p class="aviso">Este estudiante ya tiene calificación. Si escanea de nuevo, se reemplaza.</p>' : ''}`;
+  } else info.innerHTML = v ? '<p class="err">No hay ningún estudiante con ese código en el curso.</p>' : '';
+}
+function pintarScan() {
+  const box = $('#scanBox'); if (!box) return;
+  actualizarEstudiante();
+  const s = S.scan, p = prueba();
+  if (!s) { box.innerHTML = ''; return; }
+  if (s.cargando) { box.innerHTML = '<p class="cargando">Leyendo la hoja…</p>'; return; }
+  if (s.error) { box.innerHTML = `<p class="err">${esc(s.error)}</p>`; return; }
+  const g = calificar(s.respuestas, p.clave, p.escala);
+  const anuladas = s.respuestas.filter(x => x === '*').length;
+  box.innerHTML = `<hr style="border:0;border-top:1px solid var(--linea);margin:16px 0">
+    <p class="estudiante">${esc(s.est.apellido)} ${esc(s.est.nombre)}</p>
+    <div class="nota"><div class="sello"><b>${g.nota.toFixed(1)}</b><span>de ${p.escala}</span></div>
+      <div class="conteo"><div><b class="ok">${g.c}</b> buenas</div><div><b class="mal">${g.m}</b> malas</div>
+      <div class="estado">${g.b} en blanco${anuladas ? `, ${anuladas} con doble marca` : ''}</div></div></div>
+    <div class="acciones"><button class="btn pri" data-a="guardarRes">Guardar y seguir</button><button class="btn" data-a="descartar">Descartar</button></div>
+    <div class="foto"><img src="${s.overlay}" alt="Foto de la hoja con las marcas detectadas"></div>
+    <p class="estado">Verde: buena. Rojo: mala. Contorno verde: respuesta correcta no marcada. Si la lectura falló en alguna pregunta, corríjala tocando la opción.</p>
+    ${grilla(p.n, p.nOpt, s.respuestas, 'marcaScan', p.clave)}
+    <div class="acciones" style="margin-top:12px"><button class="btn pri" data-a="guardarRes">Guardar y seguir</button></div>`;
+}
+
+/* ---------------- lectura de la foto ---------------- */
+function cargarImagen(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => res(img); img.onerror = () => rej(new Error('No se pudo abrir la imagen.')); img.src = url;
+  });
+}
+async function leerFoto(file, n, nOpt) {
+  const img = await cargarImagen(file);
+  const sc = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+  const W = Math.round(img.naturalWidth * sc), H = Math.round(img.naturalHeight * sc);
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, W, H);
+  URL.revokeObjectURL(img.src);
+  const d = ctx.getImageData(0, 0, W, H).data, gray = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) gray[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
+  const r = OMR.read(gray, W, H, n, nOpt);
+  return { ...r, cv, W, H };
+}
+function dibujar(s, clave) {
+  const c = document.createElement('canvas'); c.width = s.W; c.height = s.H;
+  const x = c.getContext('2d'); x.drawImage(s.cv, 0, 0);
+  const lw = Math.max(2, s.W / 450); x.lineWidth = lw;
+  s.layout.q.forEach((q, i) => q.opts.forEach(([bx, by], o) => {
+    const [u, v] = OMR.apply(s.H, bx, by), [u2, v2] = OMR.apply(s.H, bx + s.layout.r, by);
+    const rp = Math.hypot(u2 - u, v2 - v) * 1.15, l = L[o], marcada = s.respuestas[i] === l || (s.respuestas[i] === '*' && s.fills[i][o] >= 0.3), esClave = clave[i] === l;
+    x.beginPath(); x.arc(u, v, rp, 0, Math.PI * 2);
+    if (marcada) { x.fillStyle = esClave ? 'rgba(46,125,79,.55)' : 'rgba(192,57,43,.55)'; x.fill(); }
+    else if (esClave) { x.strokeStyle = 'rgba(46,125,79,.95)'; x.stroke(); }
+  }));
+  x.strokeStyle = 'rgba(47,111,179,.9)'; x.lineWidth = lw * 1.5;
+  s.markers.forEach(([u, v]) => { x.strokeRect(u - lw * 8, v - lw * 8, lw * 16, lw * 16); });
+  return c.toDataURL('image/jpeg', 0.82);
+}
+
+/* ---------------- impresión ---------------- */
+function hojaSVG(p, est) {
+  const Ly = OMR.layout(p.n, p.nOpt);
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
+  s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
+  OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
+  const o = OMR.ORIENT; s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#000"/>`;
+  if (NOMBRE_COLEGIO) s += `<text x="100" y="9.5" font-size="3.4" text-anchor="middle" fill="#333">${esc(NOMBRE_COLEGIO)}</text>`;
+  s += `<text x="100" y="20" font-size="5.5" font-weight="700" text-anchor="middle">${esc(p.nombre)}</text>`;
+  s += `<text x="100" y="27" font-size="3.6" text-anchor="middle" fill="#333">${esc(p.cursoNombre || '')}  ·  Hoja de respuestas</text>`;
+  s += `<text x="14" y="38" font-size="3.6">Nombre:</text><line x1="30" y1="38.6" x2="186" y2="38.6" stroke="#000" stroke-width=".25"/>`;
+  s += `<text x="14" y="47" font-size="3.6">Código:</text><line x1="30" y1="47.6" x2="100" y2="47.6" stroke="#000" stroke-width=".25"/>`;
+  s += `<text x="106" y="47" font-size="3.6">Fecha:</text><line x1="120" y1="47.6" x2="186" y2="47.6" stroke="#000" stroke-width=".25"/>`;
+  if (est) {
+    s += `<text x="32" y="37.6" font-size="4" font-weight="700">${esc(est.apellido)} ${esc(est.nombre)}</text>`;
+    s += `<text x="32" y="46.6" font-size="4" font-weight="700">${esc(est.codigo)}</text>`;
+  }
+  s += `<text x="14" y="56" font-size="3" fill="#333">Rellene por completo un solo círculo por pregunta, con lápiz o esfero oscuro. No doble, raye ni tape los cuadros negros.</text>`;
+  for (let c = 0; c < Ly.cols; c++) {
+    const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
+    q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2}" font-size="3" font-weight="700" text-anchor="middle">${L[i]}</text>`);
+  }
+  Ly.q.forEach(q => {
+    s += `<text x="${q.numX}" y="${q.y + 1.1}" font-size="3.1" text-anchor="end">${q.num}</text>`;
+    q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width=".3"/>`);
+  });
+  return s + '</svg>';
+}
+function imprimir(modo) {
+  const p = prueba(), est = curso(p.cursoId)?.estudiantes || [];
+  const lista = modo === 'nombres' ? est : [null];
+  $('#printArea').innerHTML = lista.map(e => `<div class="pagina">${hojaSVG(p, e)}</div>`).join('');
+  setTimeout(() => window.print(), 50);
+}
+
+/* ---------------- exportar ---------------- */
+function exportar() {
+  const p = prueba(), est = curso(p.cursoId)?.estudiantes || [];
+  const filas = est.map(e => {
+    const r = S.resultados[e.codigo];
+    if (!r) return { 'Código': e.codigo, 'Apellido': e.apellido, 'Nombre': e.nombre, 'Buenas': '', 'Malas': '', 'En blanco': '', 'Nota': '', 'Estado': 'Sin presentar' };
+    const g = calificar(r.respuestas, p.clave, p.escala);
+    return { 'Código': e.codigo, 'Apellido': e.apellido, 'Nombre': e.nombre, 'Buenas': g.c, 'Malas': g.m, 'En blanco': g.b, 'Nota': g.nota, 'Estado': 'Calificado' };
+  });
+  const wb = XLSX.utils.book_new();
+  const h1 = XLSX.utils.json_to_sheet(filas);
+  h1['!cols'] = [{ wch: 14 }, { wch: 24 }, { wch: 24 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 7 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(wb, h1, 'Resultados');
+  const cab = ['Código', 'Apellido', 'Nombre', ...Array.from({ length: p.n }, (_, i) => 'P' + (i + 1))];
+  const det = [cab, ['CLAVE', '', '', ...p.clave]];
+  est.forEach(e => { const r = S.resultados[e.codigo]; if (r) det.push([e.codigo, e.apellido, e.nombre, ...Array.from({ length: p.n }, (_, i) => r.respuestas[i] || '')]); });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(det), 'Respuestas');
+  XLSX.writeFile(wb, `Resultados ${p.nombre.replace(/[\\/:*?"<>|]/g, '')}.xlsx`);
+}
+
+/* ---------------- abrir prueba ---------------- */
+function abrirPrueba(id) {
+  if (S.unsubRes) S.unsubRes();
+  S.pruebaId = id; S.resultados = {}; S.scan = null; S.view = 'prueba'; S.msg = '';
+  render();
+  S.unsubRes = onSnapshot(collection(db, ruta('pruebas', id, 'resultados')), snap => {
+    S.resultados = {};
+    snap.docs.forEach(d => { const r = d.data(); S.resultados[r.codigo] = r; });
+    if (S.view === 'prueba' && S.pruebaId === id) { actualizarPrueba(); actualizarEstudiante(); }
+  }, e => mostrarError(e));
+}
+
+/* ---------------- acciones ---------------- */
+const A = {
+  guardarConfig() {
+    try { const c = parseConfig($('#cfgTxt').value); localStorage.setItem('fbconfig', JSON.stringify(c)); location.reload(); }
+    catch (e) { vistaConfig('No se pudo leer la configuración: ' + e.message); }
+  },
+  async entrar() { try { await signInWithEmailAndPassword(auth, $('#lgEmail').value.trim(), $('#lgPass').value); } catch (e) { vistaLogin(errAuth(e)); } },
+  async crearProfesor() {
+    const nombre = $('#aNombre').value.trim(), email = $('#aEmail').value.trim().toLowerCase(), pass = $('#aPass').value;
+    const fail = m => { S.adminMsg = { err: m }; render(); };
+    if (!nombre || !email) return fail('Escriba el nombre y el correo del profesor.');
+    if (pass.length < 6) return fail('La contraseña temporal debe tener al menos 6 caracteres.');
+    if (email === SUPERADMIN) return fail('Ese correo es el del administrador.');
+    try {
+      const secAuth = authSecundaria();
+      const cred = await createUserWithEmailAndPassword(secAuth, email, pass);
+      await setDoc(doc(db, 'profesores', cred.user.uid), { nombre, email, activo: true, creado: serverTimestamp() });
+      await signOut(secAuth);
+      S.adminMsg = { ok: `Cuenta creada para ${nombre}. Entréguele el correo ${email} y la contraseña temporal ${pass}.` };
+    } catch (e) { S.adminMsg = { err: errAuth(e) }; }
+    render();
+  },
+  generarClave() { $('#aPass').value = Math.random().toString(36).slice(2, 6) + Math.floor(1000 + Math.random() * 9000); },
+  async alternarProfesor(el) {
+    const pr = S.profes.find(x => x.id === el.dataset.id);
+    if (pr.activo && !confirm(`¿Desactivar la cuenta de ${pr.nombre}? No podrá entrar hasta que la active de nuevo. Sus datos se conservan.`)) return;
+    await updateDoc(doc(db, 'profesores', pr.id), { activo: !pr.activo });
+  },
+  async resetProfesor(el) {
+    const pr = S.profes.find(x => x.id === el.dataset.id);
+    try { await sendPasswordResetEmail(auth, pr.email); S.adminMsg = { ok: `Se envió a ${pr.email} un correo para cambiar la contraseña.` }; }
+    catch (e) { S.adminMsg = { err: errAuth(e) }; }
+    render();
+  },
+  async olvide() {
+    const m = $('#lgEmail').value.trim(); if (!m) return vistaLogin('Escriba su correo primero.');
+    try { await sendPasswordResetEmail(auth, m); vistaLogin('', 'Le enviamos un correo para restablecer la contraseña.'); } catch (e) { vistaLogin(errAuth(e)); }
+  },
+  salir() { signOut(auth); },
+  ir(el) { if (S.unsubRes) { S.unsubRes(); S.unsubRes = null; } S.view = el.dataset.v; S.msg = ''; render(); },
+  nuevoCurso() { S.form = { nombre: '', estudiantes: [] }; S.view = 'curso'; render(); },
+  editarCurso(el) { const c = curso(el.dataset.id); S.form = { id: c.id, nombre: c.nombre, estudiantes: [...(c.estudiantes || [])] }; S.view = 'curso'; render(); },
+  leerPegado() {
+    S.form.nombre = $('#cNombre').value;
+    const rows = $('#cPegar').value.split(/\r?\n/).map(l => l.split(/\t|;|,/));
+    const est = filasAEstudiantes(rows);
+    S.form.error = est.length ? '' : 'No se encontraron estudiantes en el texto pegado.';
+    if (est.length) S.form.estudiantes = est;
+    render();
+  },
+  async guardarCurso() {
+    const f = S.form; f.nombre = $('#cNombre').value.trim();
+    if (!f.nombre) { f.error = 'Escriba el nombre del curso.'; return render(); }
+    if (!f.estudiantes.length) { f.error = 'Cargue el listado de estudiantes.'; return render(); }
+    const data = { nombre: f.nombre, estudiantes: f.estudiantes, actualizado: serverTimestamp() };
+    try {
+      if (f.id) await setDoc(doc(db, ruta('cursos', f.id)), data, { merge: true });
+      else await addDoc(collection(db, ruta('cursos')), data);
+      S.view = 'cursos'; render();
+    } catch (e) { f.error = e.message; render(); }
+  },
+  async borrarCurso() {
+    if (!confirm('¿Eliminar este curso? Las pruebas asociadas quedarán sin listado.')) return;
+    await deleteDoc(doc(db, ruta('cursos', S.form.id))); S.view = 'cursos'; render();
+  },
+  nuevaPrueba() { S.form = { nombre: '', cursoId: S.cursos[0]?.id, n: 20, nOpt: 4, escala: 5, clave: [] }; S.view = 'pruebaForm'; render(); },
+  editarPrueba() { const p = prueba(); S.form = { id: p.id, nombre: p.nombre, cursoId: p.cursoId, n: p.n, nOpt: p.nOpt, escala: p.escala, clave: [...p.clave] }; if (S.unsubRes) { S.unsubRes(); S.unsubRes = null; } S.view = 'pruebaForm'; render(); },
+  marcaClave(el) { const q = +el.dataset.q; S.form.clave[q] = S.form.clave[q] === el.dataset.l ? '' : el.dataset.l; pintarClave(); },
+  claveTexto() {
+    leerFormPrueba();
+    const t = $('#pClaveTxt').value.toUpperCase().replace(/[^A-E]/g, '');
+    for (let i = 0; i < S.form.n; i++) S.form.clave[i] = (t[i] && L.slice(0, S.form.nOpt).includes(t[i])) ? t[i] : (S.form.clave[i] || '');
+    pintarClave();
+  },
+  async guardarPrueba() {
+    leerFormPrueba(); const f = S.form;
+    if (!f.nombre) return ($('#claveErr').textContent = 'Escriba el nombre de la prueba.');
+    if (!f.clave.some(Boolean)) return ($('#claveErr').textContent = 'Defina al menos una respuesta correcta en la clave.');
+    const data = { nombre: f.nombre, cursoId: f.cursoId, cursoNombre: curso(f.cursoId)?.nombre || '', n: f.n, nOpt: f.nOpt, escala: f.escala, clave: f.clave };
+    try {
+      if (f.id) { await updateDoc(doc(db, ruta('pruebas', f.id)), data); abrirPrueba(f.id); }
+      else { const r = await addDoc(collection(db, ruta('pruebas')), { ...data, creada: serverTimestamp() }); S.pruebas.unshift({ id: r.id, ...data }); abrirPrueba(r.id); }
+    } catch (e) { $('#claveErr').textContent = e.message; }
+  },
+  async borrarPrueba() {
+    if (!confirm('¿Eliminar esta prueba y todos sus resultados?')) return;
+    const id = S.form.id, snap = await getDocs(collection(db, ruta('pruebas', id, 'resultados')));
+    const b = writeBatch(db); snap.docs.forEach(d => b.delete(d.ref)); b.delete(doc(db, ruta('pruebas', id))); await b.commit();
+    S.view = 'pruebas'; render();
+  },
+  abrirPrueba(el) { abrirPrueba(el.dataset.id); },
+  imprimir(el) { imprimir(el.dataset.modo); },
+  exportar() { exportar(); },
+  elegir(el) { const i = $('#codInput'); i.value = el.dataset.cod; S.scan = null; pintarScan(); i.scrollIntoView({ behavior: 'smooth', block: 'center' }); },
+  marcaScan(el) {
+    const q = +el.dataset.q, s = S.scan;
+    s.respuestas[q] = s.respuestas[q] === el.dataset.l ? '' : el.dataset.l;
+    s.overlay = dibujar(s, prueba().clave);
+    const y = window.scrollY; pintarScan(); window.scrollTo(0, y);
+  },
+  descartar() { S.scan = null; pintarScan(); },
+  async guardarRes() {
+    const s = S.scan, p = prueba(), g = calificar(s.respuestas, p.clave, p.escala);
+    try {
+      await setDoc(doc(db, ruta('pruebas', p.id, 'resultados', idSeguro(s.est.codigo))), {
+        codigo: s.est.codigo, apellido: s.est.apellido, nombre: s.est.nombre, respuestas: s.respuestas,
+        buenas: g.c, malas: g.m, enBlanco: g.b, nota: g.nota, fecha: serverTimestamp()
+      });
+      S.scan = null; $('#codInput').value = ''; pintarScan(); $('#codInput').focus();
+    } catch (e) { s.error = 'No se pudo guardar: ' + e.message; pintarScan(); }
+  },
+  async borrarRes(el) {
+    if (!confirm('¿Borrar la calificación de este estudiante?')) return;
+    await deleteDoc(doc(db, ruta('pruebas', S.pruebaId, 'resultados', idSeguro(el.dataset.cod))));
+  }
+};
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-a]'); if (!el || !A[el.dataset.a]) return;
+  if (el.tagName === 'LI' || el.tagName === 'BUTTON') e.preventDefault();
+  A[el.dataset.a](el, e);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.target.id === 'lgPass' || e.target.id === 'lgEmail')) A.entrar();
+});
+document.addEventListener('input', e => { if (e.target.id === 'codInput') { if (S.scan && !S.scan.cargando) { S.scan = null; } pintarScan(); } });
+document.addEventListener('change', async e => {
+  const t = e.target;
+  if (t.id === 'cArchivo' && t.files[0]) {
+    S.form.nombre = $('#cNombre').value;
+    try {
+      const wb = XLSX.read(await t.files[0].arrayBuffer());
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false });
+      const est = filasAEstudiantes(rows);
+      S.form.error = est.length ? '' : 'El archivo no tiene estudiantes reconocibles.';
+      if (est.length) S.form.estudiantes = est;
+    } catch (err) { S.form.error = 'No se pudo leer el archivo: ' + err.message; }
+    render();
+  }
+  if (['pN', 'pOpt'].includes(t.id)) { leerFormPrueba(); pintarClave(); }
+  if (t.id === 'scanInput' && t.files[0]) {
+    const est = estudianteActual(), p = prueba(), file = t.files[0]; t.value = '';
+    if (!est) return;
+    S.scan = { cargando: true, est }; pintarScan();
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      const r = await leerFoto(file, p.n, p.nOpt);
+      S.scan = { ...r, est };
+      S.scan.overlay = dibujar(S.scan, p.clave);
+    } catch (err) { S.scan = { error: err.message, est }; }
+    pintarScan();
+  }
+  if (t.id === 'scanClave' && t.files[0]) {
+    leerFormPrueba(); const file = t.files[0]; t.value = '';
+    $('#claveErr').textContent = 'Leyendo la hoja…';
+    try {
+      const r = await leerFoto(file, S.form.n, S.form.nOpt);
+      S.form.clave = r.respuestas.map(x => (x === '*' ? '' : x));
+      $('#claveErr').textContent = r.respuestas.includes('*') ? 'Algunas preguntas tenían doble marca; complételas a mano.' : '';
+      pintarClave();
+    } catch (err) { $('#claveErr').textContent = err.message; }
+  }
+});
+
+iniciar();
+</script>
+</body></html>
