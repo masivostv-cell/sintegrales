@@ -103,6 +103,8 @@ header.top{background:color-mix(in srgb,var(--hoja) 92%,transparent);backdrop-fi
 .sug small.hecho{color:var(--verde)}
 .sug .nada{color:var(--suave);cursor:default}
 .filtro{width:100%;max-width:360px;margin:0 0 10px}
+.vista-hoja{max-width:430px;margin:6px auto 0;border:1px solid var(--linea);border-radius:6px;overflow:hidden;box-shadow:0 4px 14px rgba(29,53,87,.12);background:#fff}
+.vista-hoja svg{display:block;width:100%;height:auto}
 #printArea{display:none}
 @media print{
   @page{size:auto;margin:8mm}
@@ -125,9 +127,9 @@ const OMR = (() => {
   const MARK_TL = [[4, 4], [188, 4], [188, 248], [4, 248]];
   const MARK_C = MARK_TL.map(([x, y]) => [x + MARK / 2, y + MARK / 2]);
   const ORIENT = { x: 16, y: 6, w: 22, h: 4 };
-  const LETRAS = 'ABCDE';
+  const LETRAS = 'ABCDEFGH';
 
-  function layout(n, nOpt) {
+  function layoutV1(n, nOpt) {
     const cols = Math.max(1, Math.ceil(n / 25));
     const rows = Math.ceil(n / cols);
     const top = 66, bottom = 244, left = 12, right = 188;
@@ -144,6 +146,35 @@ const OMR = (() => {
       q.push({ num: i + 1, numX: x0 + 8, y, opts });
     }
     return { cols, rows, rowH, colW, optW, r, top, left, q };
+  }
+
+  // Diseño 2: columnas de 10 preguntas mientras quepan, centradas en la hoja
+  const GRID = { top: 79, bottom: 247, left: 12, right: 188, maxRows: 27 };
+  function plan(n, nOpt) {
+    const ancho = GRID.right - GRID.left;
+    let maxCols = 1;
+    for (let c = 1; c <= 8; c++) if ((ancho / c - 14) / nOpt >= 5.2) maxCols = c;
+    let cols = Math.min(maxCols, Math.max(1, Math.ceil(n / 10)));
+    cols = Math.min(maxCols, Math.max(cols, Math.ceil(n / GRID.maxRows)));
+    return { cols, rows: Math.ceil(n / cols), maxCols };
+  }
+  const capacidad = nOpt => Math.min(100, plan(1, nOpt).maxCols * GRID.maxRows);
+  function layout(n, nOpt, v) {
+    if (v !== 2) return layoutV1(n, nOpt);
+    const { cols, rows } = plan(n, nOpt), ancho = GRID.right - GRID.left;
+    const rowH = Math.min(9.5, (GRID.bottom - GRID.top) / rows);
+    const optW = Math.min(7.5, (ancho / cols - 14) / nOpt);
+    const colW = 14 + nOpt * optW, left = GRID.left + (ancho - (cols * colW - 5)) / 2;
+    const r = Math.min(2.7, optW * 0.4, rowH * 0.38);
+    const q = [];
+    for (let i = 0; i < n; i++) {
+      const c = Math.floor(i / rows), rr = i % rows;
+      const x0 = left + c * colW, y = GRID.top + rr * rowH + rowH / 2;
+      const opts = [];
+      for (let o = 0; o < nOpt; o++) opts.push([x0 + 9 + o * optW + optW / 2, y]);
+      q.push({ num: i + 1, numX: x0 + 7, y, opts });
+    }
+    return { cols, rows, rowH, colW, optW, r, top: GRID.top, left, q };
   }
 
   function solve(A, b) {
@@ -283,7 +314,7 @@ const OMR = (() => {
     return LETRAS[idx[0][1]];
   }
 
-  function read(gray, W, H, n, nOpt) {
+  function read(gray, W, H, n, nOpt, v) {
     const bin = binarize(gray, W, H);
     const P = findMarkers(bin, W, H);
     if (!P) throw new Error('No se encontraron los cuatro cuadros negros de las esquinas. Tome la foto de frente, con la hoja completa y buena luz.');
@@ -296,12 +327,12 @@ const OMR = (() => {
       if (!best || s > best.s) best = { Hm, s };
     }
     if (!best || best.s < 0.5) throw new Error('No se reconoce la hoja de respuestas. Verifique que sea una hoja impresa desde esta aplicación.');
-    const L = layout(n, nOpt);
+    const L = layout(n, nOpt, v);
     const fills = L.q.map(q => q.opts.map(([x, y]) => sampleFill(bin, W, H, best.Hm, x, y, L.r * 0.62)));
     return { respuestas: fills.map(decide), fills, H: best.Hm, layout: L, markers: P };
   }
 
-  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, homography, apply, read };
+  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, homography, apply, read };
 })();
 </script>
 <script type="module">
@@ -492,7 +523,7 @@ function render() {
   const v = { admin: vAdmin, pruebas: vPruebas, cursos: vCursos, curso: vCursoForm, pruebaForm: vPruebaForm, prueba: vPrueba }[S.view] || vPruebas;
   app.innerHTML = marco(v());
   if (S.view === 'prueba') { actualizarPrueba(); pintarScan(); }
-  if (S.view === 'pruebaForm') pintarClave();
+  if (S.view === 'pruebaForm') { leerFormPrueba(); pintarClave(); pintarVista(); }
 }
 const tabs = () => `<div class="tabs" role="tablist">
   <button class="tab ${S.view === 'pruebas' ? 'on' : ''}" data-a="ir" data-v="pruebas">Pruebas</button>
@@ -570,9 +601,26 @@ function vPruebaForm() {
     <div class="row">
       <label class="f">Curso<select id="pCurso">${S.cursos.map(c => `<option value="${c.id}" ${c.id === f.cursoId ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></label>
       <label class="f">Número de preguntas<input id="pN" type="number" min="1" max="100" value="${f.n}"></label>
-      <label class="f">Opciones por pregunta<select id="pOpt"><option value="4" ${f.nOpt == 4 ? 'selected' : ''}>4 (A–D)</option><option value="5" ${f.nOpt == 5 ? 'selected' : ''}>5 (A–E)</option></select></label>
+      <label class="f">Opciones por pregunta<select id="pOpt">${[2, 3, 4, 5, 6, 7, 8].map(k => `<option value="${k}" ${f.nOpt == k ? 'selected' : ''}>${k} (A–${L[k - 1]})</option>`).join('')}</select></label>
       <label class="f">Nota máxima<input id="pEscala" type="number" min="1" step="0.1" value="${f.escala}"></label>
     </div>
+    <p class="estado" id="capNota"></p>
+  </div>
+  <div class="panel">
+    <h3>Encabezado de la hoja</h3>
+    <p class="estado">Lo que escriba aquí sale impreso en cada hoja. Lo que deje vacío queda como línea para llenar a mano.</p>
+    <div class="row">
+      <label class="f">Institución<input id="pColegio" value="${esc(f.colegio)}" placeholder="Nombre del colegio"></label>
+      <label class="f">Docente<input id="pDocente" value="${esc(f.docente)}"></label>
+    </div>
+    <div class="row">
+      <label class="f">Materia<input id="pMateria" value="${esc(f.materia)}" placeholder="Ej.: Matemáticas"></label>
+      <label class="f">Trimestre<input id="pPeriodo" value="${esc(f.periodo)}" placeholder="Ej.: Segundo trimestre"></label>
+      <label class="f">Fecha<input id="pFecha" type="date" value="${esc(f.fecha)}"></label>
+    </div>
+    ${f.v !== 2 ? '<p class="aviso">Esta prueba ya tiene hojas calificadas con el diseño anterior, por eso se mantiene ese diseño. Para usar el nuevo encabezado y hasta 8 opciones, cree una prueba nueva.</p>' : ''}
+    <h3 style="margin-top:8px">Vista previa</h3>
+    <div id="vistaHoja" class="vista-hoja"></div>
   </div>
   <div class="panel">
     <h3>Clave de respuestas</h3>
@@ -589,7 +637,7 @@ function vPruebaForm() {
   ${f.id ? `<button class="btn peligro" data-a="borrarPrueba">Eliminar prueba</button>` : ''}</div>`;
 }
 function grilla(n, nOpt, valores, accion, clave) {
-  let h = '<div class="grilla">';
+  let h = `<div class="grilla" style="grid-template-columns:repeat(auto-fill,minmax(${40 + nOpt * 32}px,1fr))">`;
   for (let q = 0; q < n; q++) {
     const v = valores[q] || '', k = clave ? clave[q] : '';
     const cls = clave && k ? (v === k ? 'bien' : 'malo') : '';
@@ -602,6 +650,11 @@ function grilla(n, nOpt, valores, accion, clave) {
   }
   return h + '</div>';
 }
+function pintarVista() {
+  const el = $('#vistaHoja'); if (!el) return;
+  const f = S.form;
+  el.innerHTML = hojaSVG({ ...f, cursoNombre: curso(f.cursoId)?.nombre || '' }, null);
+}
 function pintarClave() {
   const f = S.form, el = $('#claveGrid');
   if (el) el.innerHTML = grilla(f.n, f.nOpt, f.clave, 'marcaClave');
@@ -613,6 +666,12 @@ function leerFormPrueba() {
   f.n = Math.max(1, Math.min(100, parseInt($('#pN').value) || 1));
   f.nOpt = parseInt($('#pOpt').value);
   f.escala = parseFloat($('#pEscala').value) || 5;
+  for (const [k, id] of [['colegio', 'pColegio'], ['docente', 'pDocente'], ['materia', 'pMateria'], ['periodo', 'pPeriodo'], ['fecha', 'pFecha']]) f[k] = $('#' + id).value.trim();
+  if (f.nOpt > 5) f.v = 2;
+  const cap = f.v === 2 ? OMR.capacidad(f.nOpt) : 100;
+  const nota = $('#capNota');
+  if (f.n > cap) { f.n = cap; $('#pN').value = cap; }
+  if (nota) nota.textContent = `Con ${f.nOpt} opciones caben hasta ${cap} preguntas en una hoja.`;
   f.clave = Array.from({ length: f.n }, (_, i) => (L.slice(0, f.nOpt).includes(f.clave[i]) ? f.clave[i] : ''));
 }
 
@@ -778,7 +837,7 @@ function cargarImagen(file) {
     img.onload = () => res(img); img.onerror = () => rej(new Error('No se pudo abrir la imagen.')); img.src = url;
   });
 }
-async function leerFoto(file, n, nOpt) {
+async function leerFoto(file, n, nOpt, v) {
   const img = await cargarImagen(file);
   const sc = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
   const W = Math.round(img.naturalWidth * sc), H = Math.round(img.naturalHeight * sc);
@@ -788,7 +847,7 @@ async function leerFoto(file, n, nOpt) {
   URL.revokeObjectURL(img.src);
   const d = ctx.getImageData(0, 0, W, H).data, gray = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) gray[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
-  const r = OMR.read(gray, W, H, n, nOpt);
+  const r = OMR.read(gray, W, H, n, nOpt, v);
   return { ...r, cv, W, H };
 }
 function dibujar(s, clave) {
@@ -808,8 +867,8 @@ function dibujar(s, clave) {
 }
 
 /* ---------------- impresión ---------------- */
-function hojaSVG(p, est) {
-  const Ly = OMR.layout(p.n, p.nOpt);
+function hojaSVGv1(p, est) {
+  const Ly = OMR.layout(p.n, p.nOpt, 1);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
   s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
   OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
@@ -835,6 +894,50 @@ function hojaSVG(p, est) {
   });
   return s + '</svg>';
 }
+const fechaTxt = f => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(f || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : (f || ''); };
+function textoAjustado(x, y, txt, maxW, size, extra = '') {
+  const est = String(txt).length * size * 0.52;
+  const fit = est > maxW ? ` textLength="${maxW}" lengthAdjust="spacingAndGlyphs"` : '';
+  return `<text x="${x}" y="${y}" font-size="${size}"${fit} ${extra}>${esc(txt)}</text>`;
+}
+function campo(x, y, etiqueta, valor, fin, wEtq) {
+  let s = `<text x="${x}" y="${y}" font-size="3.3" fill="#444">${etiqueta}</text>`;
+  const x2 = x + wEtq;
+  if (valor) s += textoAjustado(x2, y, valor, fin - x2, 3.6, 'font-weight="700"');
+  else s += `<line x1="${x2}" y1="${y + 0.7}" x2="${fin}" y2="${y + 0.7}" stroke="#000" stroke-width=".25"/>`;
+  return s;
+}
+function hojaSVG(p, est) {
+  if (p.v !== 2) return hojaSVGv1(p, est);
+  const Ly = OMR.layout(p.n, p.nOpt, 2);
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
+  s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
+  OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
+  const o = OMR.ORIENT; s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#000"/>`;
+  if (p.colegio) s += textoAjustado(100, 9.6, p.colegio.toUpperCase(), 136, 3.6, 'font-weight="700" text-anchor="middle"');
+  s += textoAjustado(100, 18.5, p.nombre || 'Nombre de la prueba', 170, 5.4, 'font-weight="700" text-anchor="middle"');
+  s += `<text x="100" y="24.2" font-size="2.9" text-anchor="middle" fill="#555" letter-spacing=".4">HOJA DE RESPUESTAS</text>`;
+  s += `<rect x="12" y="27.5" width="176" height="23.5" rx="2" fill="none" stroke="#000" stroke-width=".3"/>`;
+  s += campo(15, 34, 'Materia:', p.materia, 98, 14);
+  s += campo(102, 34, 'Docente:', p.docente, 185, 15);
+  s += campo(15, 41, 'Curso:', p.cursoNombre, 98, 11.5);
+  s += campo(102, 41, 'Trimestre:', p.periodo, 185, 17);
+  s += campo(15, 48, 'Fecha:', fechaTxt(p.fecha), 98, 11.5);
+  s += campo(102, 48, 'Calificación:', '', 185, 21);
+  s += campo(14, 59, 'Estudiante:', est ? `${est.apellido} ${est.nombre}` : '', 186, 19);
+  s += campo(14, 66, 'Código / documento:', est ? est.codigo : '', 110, 32);
+  s += `<text x="14" y="72.5" font-size="2.8" fill="#333">Rellene por completo un solo círculo por pregunta, con lápiz o esfero oscuro. No doble, raye ni tape los cuadros negros.</text>`;
+  for (let c = 0; c < Ly.cols; c++) {
+    const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
+    q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2.2}" font-size="3" font-weight="700" text-anchor="middle">${L[i]}</text>`);
+  }
+  const fs = Math.min(3.3, Ly.rowH * 0.45);
+  Ly.q.forEach(q => {
+    s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num}</text>`;
+    q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width=".3"/>`);
+  });
+  return s + '</svg>';
+}
 function imprimir(modo) {
   const p = prueba(), est = curso(p.cursoId)?.estudiantes || [];
   const lista = modo === 'nombres' ? est : [null];
@@ -855,6 +958,8 @@ function exportar() {
   const h1 = XLSX.utils.json_to_sheet(filas);
   h1['!cols'] = [{ wch: 14 }, { wch: 24 }, { wch: 24 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 7 }, { wch: 14 }];
   XLSX.utils.book_append_sheet(wb, h1, 'Resultados');
+  const info = [['Prueba', p.nombre], ['Institución', p.colegio || ''], ['Docente', p.docente || ''], ['Materia', p.materia || ''], ['Curso', p.cursoNombre || ''], ['Trimestre', p.periodo || ''], ['Fecha', fechaTxt(p.fecha)], ['Preguntas', p.n], ['Nota máxima', p.escala]];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(info), 'Información');
   const cab = ['Código', 'Apellido', 'Nombre', ...Array.from({ length: p.n }, (_, i) => 'P' + (i + 1))];
   const det = [cab, ['CLAVE', '', '', ...p.clave]];
   est.forEach(e => { const r = S.resultados[e.codigo]; if (r) det.push([e.codigo, e.apellido, e.nombre, ...Array.from({ length: p.n }, (_, i) => r.respuestas[i] || '')]); });
@@ -939,12 +1044,12 @@ const A = {
     if (!confirm('¿Eliminar este curso? Las pruebas asociadas quedarán sin listado.')) return;
     await deleteDoc(doc(db, ruta('cursos', S.form.id))); S.view = 'cursos'; render();
   },
-  nuevaPrueba() { S.form = { nombre: '', cursoId: S.cursos[0]?.id, n: 20, nOpt: 4, escala: 5, clave: [] }; S.view = 'pruebaForm'; render(); },
-  editarPrueba() { const p = prueba(); S.form = { id: p.id, nombre: p.nombre, cursoId: p.cursoId, n: p.n, nOpt: p.nOpt, escala: p.escala, clave: [...p.clave] }; if (S.unsubRes) { S.unsubRes(); S.unsubRes = null; } S.view = 'pruebaForm'; render(); },
+  nuevaPrueba() { const ant = S.pruebas[0] || {}; S.form = { v: 2, nombre: '', cursoId: S.cursos[0]?.id, n: 20, nOpt: 4, escala: 5, clave: [], colegio: ant.colegio || NOMBRE_COLEGIO, docente: S.perfil?.nombre || ant.docente || '', materia: ant.materia || '', periodo: ant.periodo || '', fecha: '' }; S.view = 'pruebaForm'; render(); },
+  editarPrueba() { const p = prueba(); S.form = { id: p.id, v: (p.v === 2 || !Object.keys(S.resultados).length) ? 2 : 1, nombre: p.nombre, cursoId: p.cursoId, n: p.n, nOpt: p.nOpt, escala: p.escala, clave: [...p.clave], colegio: p.colegio || '', docente: p.docente || S.perfil?.nombre || '', materia: p.materia || '', periodo: p.periodo || '', fecha: p.fecha || '' }; if (S.unsubRes) { S.unsubRes(); S.unsubRes = null; } S.view = 'pruebaForm'; render(); },
   marcaClave(el) { const q = +el.dataset.q; S.form.clave[q] = S.form.clave[q] === el.dataset.l ? '' : el.dataset.l; pintarClave(); },
   claveTexto() {
     leerFormPrueba();
-    const t = $('#pClaveTxt').value.toUpperCase().replace(/[^A-E]/g, '');
+    const t = $('#pClaveTxt').value.toUpperCase().replace(/[^A-H]/g, '');
     for (let i = 0; i < S.form.n; i++) S.form.clave[i] = (t[i] && L.slice(0, S.form.nOpt).includes(t[i])) ? t[i] : (S.form.clave[i] || '');
     pintarClave();
   },
@@ -952,7 +1057,7 @@ const A = {
     leerFormPrueba(); const f = S.form;
     if (!f.nombre) return ($('#claveErr').textContent = 'Escriba el nombre de la prueba.');
     if (!f.clave.some(Boolean)) return ($('#claveErr').textContent = 'Defina al menos una respuesta correcta en la clave.');
-    const data = { nombre: f.nombre, cursoId: f.cursoId, cursoNombre: curso(f.cursoId)?.nombre || '', n: f.n, nOpt: f.nOpt, escala: f.escala, clave: f.clave };
+    const data = { v: f.v, nombre: f.nombre, cursoId: f.cursoId, cursoNombre: curso(f.cursoId)?.nombre || '', n: f.n, nOpt: f.nOpt, escala: f.escala, clave: f.clave, colegio: f.colegio, docente: f.docente, materia: f.materia, periodo: f.periodo, fecha: f.fecha };
     try {
       if (f.id) { await updateDoc(doc(db, ruta('pruebas', f.id)), data); abrirPrueba(f.id); }
       else { const r = await addDoc(collection(db, ruta('pruebas')), { ...data, creada: serverTimestamp() }); S.pruebas.unshift({ id: r.id, ...data }); abrirPrueba(r.id); }
@@ -1017,6 +1122,7 @@ document.addEventListener('input', e => {
     pintarScan(); mostrarSug();
   }
   if (e.target.id === 'filtroTabla') actualizarPrueba();
+  if (S.view === 'pruebaForm' && ['pNombre', 'pColegio', 'pDocente', 'pMateria', 'pPeriodo'].includes(e.target.id)) { leerFormPrueba(); pintarVista(); }
 });
 document.addEventListener('focusin', e => { if (e.target.id === 'codInput') mostrarSug(); });
 document.addEventListener('change', async e => {
@@ -1032,14 +1138,14 @@ document.addEventListener('change', async e => {
     } catch (err) { S.form.error = 'No se pudo leer el archivo: ' + err.message; }
     render();
   }
-  if (['pN', 'pOpt'].includes(t.id)) { leerFormPrueba(); pintarClave(); }
+  if (['pN', 'pOpt', 'pCurso', 'pFecha'].includes(t.id)) { leerFormPrueba(); pintarClave(); pintarVista(); }
   if (t.id === 'scanInput' && t.files[0]) {
     const est = estudianteActual(), p = prueba(), file = t.files[0]; t.value = '';
     if (!est) return;
     S.scan = { cargando: true, est }; pintarScan();
     await new Promise(r => setTimeout(r, 30));
     try {
-      const r = await leerFoto(file, p.n, p.nOpt);
+      const r = await leerFoto(file, p.n, p.nOpt, p.v);
       S.scan = { ...r, est };
       S.scan.overlay = dibujar(S.scan, p.clave);
     } catch (err) { S.scan = { error: err.message, est }; }
@@ -1049,7 +1155,7 @@ document.addEventListener('change', async e => {
     leerFormPrueba(); const file = t.files[0]; t.value = '';
     $('#claveErr').textContent = 'Leyendo la hoja…';
     try {
-      const r = await leerFoto(file, S.form.n, S.form.nOpt);
+      const r = await leerFoto(file, S.form.n, S.form.nOpt, S.form.v);
       S.form.clave = r.respuestas.map(x => (x === '*' ? '' : x));
       $('#claveErr').textContent = r.respuestas.includes('*') ? 'Algunas preguntas tenían doble marca; complételas a mano.' : '';
       pintarClave();
