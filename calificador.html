@@ -315,7 +315,31 @@ const OMR = (() => {
     return LETRAS[idx[0][1]];
   }
 
-  function read(gray, W, H, n, nOpt, v) {
+  // Código de formato (hoja universal): inicio + 7 bits preguntas + 3 bits opciones + 2 de control + fin
+  const CODE = { y: 250.5, w: 3.6, h: 3, paso: 6, celdas: 14 };
+  CODE.x0 = 100 - CODE.celdas * CODE.paso / 2 + (CODE.paso - CODE.w) / 2;
+  function codificar(N, K) {
+    const b = [1];
+    for (let i = 6; i >= 0; i--) b.push((N >> i) & 1);
+    for (let i = 2; i >= 0; i--) b.push(((K - 1) >> i) & 1);
+    const unos = b.slice(1).reduce((a, c) => a + c, 0);
+    b.push(unos % 2, (N + K) % 2, 1);
+    return b;
+  }
+  function celdasCodigo() {
+    return Array.from({ length: CODE.celdas }, (_, i) => ({ x: CODE.x0 + i * CODE.paso, y: CODE.y, w: CODE.w, h: CODE.h }));
+  }
+  function decodificar(bin, W, H, Hm) {
+    const b = celdasCodigo().map(r => sampleRect(bin, W, H, Hm, r) > 0.5 ? 1 : 0);
+    let N = 0, K = 0;
+    for (let i = 1; i <= 7; i++) N = N * 2 + b[i];
+    for (let i = 8; i <= 10; i++) K = K * 2 + b[i];
+    K += 1;
+    const ok = b[0] === 1 && b[13] === 1 && N >= 1 && N <= 100 && K >= 2 && b.join('') === codificar(N, K).join('');
+    return ok ? { N, K } : null;
+  }
+
+  function read(gray, W, H, n, nOpt, v, opc = {}) {
     const bin = binarize(gray, W, H);
     const P = findMarkers(bin, W, H);
     if (!P) throw new Error('No se encontraron los cuatro cuadros negros de las esquinas. Tome la foto de frente, con la hoja completa y buena luz.');
@@ -328,12 +352,18 @@ const OMR = (() => {
       if (!best || s > best.s) best = { Hm, s };
     }
     if (!best || best.s < 0.5) throw new Error('No se reconoce la hoja de respuestas. Verifique que sea una hoja impresa desde esta aplicación.');
+    let formato = null;
+    if (opc.auto) {
+      formato = decodificar(bin, W, H, best.Hm) || opc.respaldo || null;
+      if (!formato) throw new Error('No se pudo leer el formato de la hoja universal (la franja de cuadritos de abajo). Tome la foto de nuevo con la hoja completa.');
+      n = formato.N; nOpt = formato.K; v = 2;
+    }
     const L = layout(n, nOpt, v);
     const fills = L.q.map(q => q.opts.map(([x, y]) => sampleFill(bin, W, H, best.Hm, x, y, L.r * 0.62)));
-    return { respuestas: fills.map(decide), fills, H: best.Hm, layout: L, markers: P };
+    return { respuestas: fills.map(decide), fills, H: best.Hm, layout: L, markers: P, formato };
   }
 
-  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, homography, apply, read };
+  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, codificar, celdasCodigo, homography, apply, read };
 })();
 </script>
 <script type="module">
@@ -515,6 +545,9 @@ function hojaUniversalSVG(cfg, vals = {}) {
     });
   }
   s += `<text x="14" y="72.5" font-size="2.8" fill="#333">Rellene por completo un solo círculo por pregunta. Responda solo las preguntas y opciones que indique el docente.</text>`;
+  const bits = OMR.codificar(cfg.preguntas, cfg.opciones), cel = OMR.celdasCodigo();
+  cel.forEach((r, i) => s += bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.4}" y="${r.y + 0.4}" width="${r.w - 0.8}" height="${r.h - 0.8}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
+  s += `<text x="${cel[13].x + 6}" y="${cel[0].y + 2.4}" font-size="2.5" fill="#666">${cfg.preguntas} · A–${L[cfg.opciones - 1]}</text>`;
   for (let c = 0; c < Ly.cols; c++) {
     const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
     q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2.2}" font-size="3" font-weight="700" text-anchor="middle">${L[i]}</text>`);
@@ -528,22 +561,31 @@ function hojaUniversalSVG(cfg, vals = {}) {
 }
 function vUniversal(editable) {
   const u = uni();
-  if (!editable) return `<div class="panel"><div class="acciones" style="justify-content:space-between;align-items:center">
-    <div><h3 style="margin:0">Hoja universal del colegio</h3><p class="estado" style="margin:2px 0 0">Sirve para cualquier materia y curso: ${u.preguntas} preguntas, opciones A–${L[u.opciones - 1]}.</p></div>
-    <button class="btn" data-a="imprimirUni">Imprimir hoja universal</button></div></div>`;
+  const selOpt = (id, val) => `<select id="${id}">${[2, 3, 4, 5, 6, 7, 8].map(k => `<option value="${k}" ${val == k ? 'selected' : ''}>${L[k - 1]}</option>`).join('')}</select>`;
+  if (!editable) return `<div class="panel"><h3>Hoja universal del colegio</h3>
+    <p class="estado">Sirve para cualquier materia y curso. Elija el tamaño antes de imprimir; la app reconoce sola el formato al escanear.</p>
+    <div class="row">
+      <label class="f">Número de preguntas<input id="tPreg" type="number" min="5" max="100" value="${u.preguntas}"></label>
+      <label class="f">Opciones: de la A hasta la${selOpt('tOpt', u.opciones)}</label>
+      <label class="f">Copias<input id="tCopias" type="number" min="1" max="200" value="1"></label>
+    </div>
+    <p class="estado" id="tCap"></p>
+    <div class="acciones"><button class="btn pri" data-a="imprimirUni">Imprimir hoja universal</button><button class="btn" data-a="verUni">Ver vista previa</button></div>
+    <div class="vista-hoja" id="vistaUniT" hidden></div></div>`;
   const cap = OMR.capacidad(u.opciones);
   return `<div class="panel"><h3>Hoja universal del colegio</h3>
     <p class="estado">Una sola hoja para todas las materias y cursos. Los profesores la eligen al crear la prueba y usan solo las preguntas y opciones que necesiten.</p>
     <div class="row">
       <label class="f">Institución<input id="uColegio" value="${esc(u.colegio)}"></label>
-      <label class="f">Preguntas en la hoja<input id="uPreg" type="number" min="5" max="${cap}" value="${u.preguntas}"></label>
-      <label class="f">Opciones<select id="uOpt">${[2, 3, 4, 5, 6, 7, 8].map(k => `<option value="${k}" ${u.opciones == k ? 'selected' : ''}>${k} (A–${L[k - 1]})</option>`).join('')}</select></label>
+      <label class="f">Preguntas (por defecto)<input id="uPreg" type="number" min="5" max="${cap}" value="${u.preguntas}"></label>
+      <label class="f">Opciones: de la A hasta la${selOpt('uOpt', u.opciones)}</label>
+      <label class="f">Copias<input id="tCopias" type="number" min="1" max="200" value="1"></label>
     </div>
     <p class="estado">Datos que se llenan a mano en el encabezado:</p>
     <div class="acciones" style="margin-bottom:12px">${CAMPOS_U.map(([k, et]) => `<label class="chip"><input type="checkbox" class="uCampo" value="${k}" ${u.campos.includes(k) ? 'checked' : ''}> ${et}</label>`).join('')}</div>
     <div class="acciones"><button class="btn pri" data-a="guardarUni">Guardar hoja universal</button><button class="btn" data-a="imprimirUni">Imprimir</button></div>
     ${S.uniMsg ? `<p class="aviso">${esc(S.uniMsg)}</p>` : ''}
-    <p class="aviso">Si cambia el número de preguntas o de opciones, las hojas universales ya impresas solo sirven para las pruebas creadas antes del cambio.</p>
+    <p class="estado">El número de preguntas y las opciones son solo el valor por defecto: cada profesor puede cambiarlos al imprimir. Cada hoja lleva abajo una franja de cuadritos con su formato, así la app sabe leerla sin importar el tamaño.</p>
     <h3 style="margin-top:8px">Vista previa</h3><div class="vista-hoja" id="vistaUni">${hojaUniversalSVG(u)}</div></div>`;
 }
 function leerUniForm() {
@@ -554,14 +596,23 @@ function leerUniForm() {
     campos: [...document.querySelectorAll('.uCampo:checked')].map(x => x.value)
   };
 }
+function cfgUniImprimir() {
+  if (esAdmin() && $('#uOpt')) return { ...uni(), ...leerUniForm() };
+  const K = parseInt($('#tOpt')?.value) || uni().opciones, cap = OMR.capacidad(K);
+  let N = Math.max(5, Math.min(cap, parseInt($('#tPreg')?.value) || uni().preguntas));
+  if ($('#tPreg') && +$('#tPreg').value > cap) $('#tPreg').value = N;
+  const c = $('#tCap'); if (c) c.textContent = `Con opciones hasta la ${L[K - 1]} caben hasta ${cap} preguntas.`;
+  return { ...uni(), preguntas: N, opciones: K };
+}
 function hojaDePrueba(p, est) {
   if (p.hoja !== 'universal') return hojaSVG(p, est);
   const vals = est ? { estudiante: `${est.apellido} ${est.nombre}`, codigo: est.codigo, curso: p.cursoNombre, materia: p.materia, docente: p.docente, prueba: p.nombre, periodo: p.periodo, fecha: fechaTxt(p.fecha) } : {};
-  return hojaUniversalSVG({ ...uni(), preguntas: p.uN || uni().preguntas, opciones: p.uOpt || uni().opciones }, vals);
+  return hojaUniversalSVG({ ...uni(), preguntas: p.n, opciones: p.nOpt }, vals);
 }
 async function leerHoja(file, p) {
   if (p.hoja !== 'universal') return leerFoto(file, p.n, p.nOpt, p.v);
-  const r = await leerFoto(file, p.uN, p.uOpt, 2);
+  const r = await leerFoto(file, p.n, p.nOpt, 2, { auto: true, respaldo: p.uN ? { N: p.uN, K: p.uOpt } : null });
+  if (r.formato.N < p.n) throw new Error(`Esta hoja universal tiene ${r.formato.N} preguntas y la prueba tiene ${p.n}. Use una hoja con al menos ${p.n} preguntas.`);
   r.respuestas = r.respuestas.slice(0, p.n);
   r.fills = r.fills.slice(0, p.n);
   r.layout = { ...r.layout, q: r.layout.q.slice(0, p.n) };
@@ -694,7 +745,7 @@ function vPruebaForm() {
     <label class="f">Nombre de la prueba<input id="pNombre" value="${esc(f.nombre)}" placeholder="Ej.: Evaluación periodo 3"></label>
     <label class="f">Hoja de respuestas<select id="pHoja" ${f.bloqueada ? 'disabled' : ''}>
       <option value="propia" ${f.hoja !== 'universal' ? 'selected' : ''}>Hoja propia de esta prueba (con su encabezado)</option>
-      <option value="universal" ${f.hoja === 'universal' ? 'selected' : ''}>Hoja universal del colegio (${f.hoja === 'universal' && f.uN ? f.uN : uni().preguntas} preguntas, A–${L[(f.hoja === 'universal' && f.uOpt ? f.uOpt : uni().opciones) - 1]})</option>
+      <option value="universal" ${f.hoja === 'universal' ? 'selected' : ''}>Hoja universal del colegio (sirve para cualquier materia)</option>
     </select></label>
     ${f.bloqueada ? '<p class="estado">El tipo de hoja no se puede cambiar porque ya hay estudiantes calificados.</p>' : ''}
     <div class="row">
@@ -769,11 +820,10 @@ function leerFormPrueba() {
   if (!f.bloqueada) f.hoja = $('#pHoja').value;
   const nota = $('#capNota');
   if (f.hoja === 'universal') {
-    if (!f.bloqueada || !f.uN) { f.uN = uni().preguntas; f.uOpt = uni().opciones; }
-    if (f.nOpt > f.uOpt) { f.nOpt = f.uOpt; $('#pOpt').value = f.uOpt; }
-    if (f.n > f.uN) { f.n = f.uN; $('#pN').value = f.uN; }
     f.v = 2;
-    if (nota) nota.textContent = `La hoja universal tiene ${f.uN} preguntas con opciones A–${L[f.uOpt - 1]}. Los estudiantes responden solo hasta la pregunta ${f.n} y la opción ${L[f.nOpt - 1]}.`;
+    const cap = OMR.capacidad(f.nOpt);
+    if (f.n > cap) { f.n = cap; $('#pN').value = cap; }
+    if (nota) nota.textContent = `Sirve cualquier hoja universal que tenga al menos ${f.n} preguntas y opciones hasta la ${L[f.nOpt - 1]}. La app reconoce sola el formato de cada hoja al escanearla.`;
   } else {
     if (f.nOpt > 5) f.v = 2;
     const cap = f.v === 2 ? OMR.capacidad(f.nOpt) : 100;
@@ -947,7 +997,7 @@ function cargarImagen(file) {
     img.onload = () => res(img); img.onerror = () => rej(new Error('No se pudo abrir la imagen.')); img.src = url;
   });
 }
-async function leerFoto(file, n, nOpt, v) {
+async function leerFoto(file, n, nOpt, v, opc) {
   const img = await cargarImagen(file);
   const sc = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
   const W = Math.round(img.naturalWidth * sc), H = Math.round(img.naturalHeight * sc);
@@ -957,7 +1007,7 @@ async function leerFoto(file, n, nOpt, v) {
   URL.revokeObjectURL(img.src);
   const d = ctx.getImageData(0, 0, W, H).data, gray = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) gray[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
-  const r = OMR.read(gray, W, H, n, nOpt, v);
+  const r = OMR.read(gray, W, H, n, nOpt, v, opc);
   return { ...r, cv, W, H };
 }
 function dibujar(s, clave) {
@@ -1102,10 +1152,12 @@ const A = {
     render();
   },
   imprimirUni() {
-    const cfg = esAdmin() && $('#uOpt') ? { ...uni(), ...leerUniForm() } : uni();
-    $('#printArea').innerHTML = `<div class="pagina">${hojaUniversalSVG(cfg)}</div>`;
+    const cfg = cfgUniImprimir(), copias = Math.max(1, Math.min(200, parseInt($('#tCopias')?.value) || 1));
+    const pag = `<div class="pagina">${hojaUniversalSVG(cfg)}</div>`;
+    $('#printArea').innerHTML = pag.repeat(copias);
     setTimeout(() => window.print(), 50);
   },
+  verUni() { const v = $('#vistaUniT'); v.hidden = !v.hidden; if (!v.hidden) v.innerHTML = hojaUniversalSVG(cfgUniImprimir()); },
   async crearProfesor() {
     const nombre = $('#aNombre').value.trim(), email = $('#aEmail').value.trim().toLowerCase(), pass = $('#aPass').value;
     const fail = m => { S.adminMsg = { err: m }; render(); };
@@ -1177,7 +1229,7 @@ const A = {
     leerFormPrueba(); const f = S.form;
     if (!f.nombre) return ($('#claveErr').textContent = 'Escriba el nombre de la prueba.');
     if (!f.clave.some(Boolean)) return ($('#claveErr').textContent = 'Defina al menos una respuesta correcta en la clave.');
-    const data = { v: f.v, hoja: f.hoja, uN: f.hoja === 'universal' ? f.uN : null, uOpt: f.hoja === 'universal' ? f.uOpt : null, nombre: f.nombre, cursoId: f.cursoId, cursoNombre: curso(f.cursoId)?.nombre || '', n: f.n, nOpt: f.nOpt, escala: f.escala, clave: f.clave, colegio: f.colegio, docente: f.docente, materia: f.materia, periodo: f.periodo, fecha: f.fecha };
+    const data = { v: f.v, hoja: f.hoja, uN: f.hoja === 'universal' ? (f.uN || null) : null, uOpt: f.hoja === 'universal' ? (f.uOpt || null) : null, nombre: f.nombre, cursoId: f.cursoId, cursoNombre: curso(f.cursoId)?.nombre || '', n: f.n, nOpt: f.nOpt, escala: f.escala, clave: f.clave, colegio: f.colegio, docente: f.docente, materia: f.materia, periodo: f.periodo, fecha: f.fecha };
     try {
       if (f.id) { await updateDoc(doc(db, ruta('pruebas', f.id)), data); abrirPrueba(f.id); }
       else { const r = await addDoc(collection(db, ruta('pruebas')), { ...data, creada: serverTimestamp() }); S.pruebas.unshift({ id: r.id, ...data }); abrirPrueba(r.id); }
@@ -1245,6 +1297,7 @@ document.addEventListener('input', e => {
   if (S.view === 'pruebaForm' && ['pNombre', 'pColegio', 'pDocente', 'pMateria', 'pPeriodo'].includes(e.target.id)) { leerFormPrueba(); pintarVista(); }
 });
 function vistaUniViva(e) {
+  if (['tPreg', 'tOpt'].includes(e.target.id)) { const v = $('#vistaUniT'), cfg = cfgUniImprimir(); if (v && !v.hidden) v.innerHTML = hojaUniversalSVG(cfg); }
   if (S.view === 'admin' && (['uColegio', 'uPreg', 'uOpt'].includes(e.target.id) || e.target.classList?.contains('uCampo'))) {
     const v = $('#vistaUni'); if (v) v.innerHTML = hojaUniversalSVG({ ...uni(), ...leerUniForm() });
   }
