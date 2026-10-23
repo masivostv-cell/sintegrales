@@ -91,6 +91,18 @@ header.top{background:color-mix(in srgb,var(--hoja) 92%,transparent);backdrop-fi
 .login .marca svg{flex:0 0 auto}
 .login .marca h2{margin:0;line-height:1.2}
 .login .marca p{margin:2px 0 0;color:var(--suave);font-size:.95rem}
+.buscador{position:relative;margin-bottom:12px}
+.buscador input{width:100%;font-size:1.05rem;padding:12px 12px 12px 40px}
+.buscador .lupa{position:absolute;left:12px;top:13px;pointer-events:none;color:var(--suave)}
+.sug{position:absolute;left:0;right:0;top:100%;z-index:10;margin:4px 0 0;padding:4px;list-style:none;background:var(--hoja);border:1px solid var(--linea);border-radius:10px;box-shadow:0 10px 28px rgba(29,53,87,.18);max-height:340px;overflow:auto}
+.sug li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:7px;cursor:pointer}
+.sug li.act,.sug li:hover{background:var(--resalte)}
+.sug li b{color:var(--tinta);font-weight:700}
+.sug li mark{background:none;color:inherit;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px;text-decoration-color:var(--azul)}
+.sug small{color:var(--suave);white-space:nowrap}
+.sug small.hecho{color:var(--verde)}
+.sug .nada{color:var(--suave);cursor:default}
+.filtro{width:100%;max-width:360px;margin:0 0 10px}
 #printArea{display:none}
 @media print{
   @page{size:auto;margin:8mm}
@@ -333,7 +345,7 @@ const idSeguro = s => String(s).trim().replace(/[\/]/g, '_').replace(/^\.+$/, '_
 const L = OMR.LETRAS;
 
 let auth, db;
-const S = { user: null, view: 'pruebas', cursos: [], pruebas: [], resultados: {}, pruebaId: null, form: null, scan: null, unsub: [], unsubRes: null, msg: '' };
+const S = { sel: null, sugIdx: 0, sugLista: [], user: null, view: 'pruebas', cursos: [], pruebas: [], resultados: {}, pruebaId: null, form: null, scan: null, unsub: [], unsubRes: null, msg: '' };
 
 /* ---------------- arranque ---------------- */
 function leerConfig() {
@@ -622,34 +634,110 @@ function vPrueba() {
   </div>
   <div class="panel">
     <h3>Calificar</h3>
-    <label class="f">Código o documento del estudiante
-      <input id="codInput" list="estList" autocomplete="off" inputmode="search" placeholder="Escriba o elija de la lista"></label>
-    <datalist id="estList">${opts}</datalist>
+    <label class="f" for="codInput" style="margin-bottom:4px">Buscar estudiante por código o nombre</label>
+    <div class="buscador">
+      <svg class="lupa" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8"/></svg>
+      <input id="codInput" type="search" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="sug" aria-autocomplete="list" placeholder="Ej.: 1023, ana perez o perez ana">
+      <ul id="sug" class="sug" role="listbox" hidden></ul>
+    </div>
     <div id="estInfo"></div>
     <label class="btn pri big" id="btnScan" aria-disabled="true">Escanear hoja con la cámara
       <input type="file" accept="image/*" capture="environment" id="scanInput" hidden></label>
     <div id="scanBox"></div>
   </div>
-  <div class="panel"><div id="resumen"></div><div class="tabla" id="tabla"></div></div>`;
+  <div class="panel"><div id="resumen"></div>
+    <input id="filtroTabla" class="filtro" type="search" autocomplete="off" placeholder="Filtrar la tabla por código o nombre">
+    <div class="tabla" id="tabla"></div></div>`;
 }
 function actualizarPrueba() {
   const p = prueba(); if (!p || !$('#tabla')) return;
   const est = curso(p.cursoId)?.estudiantes || [];
   let hechos = 0, suma = 0;
-  const filas = est.map(e => {
+  est.forEach(e => { const r = S.resultados[e.codigo]; if (r) { hechos++; suma += calificar(r.respuestas, p.clave, p.escala).nota; } });
+  const fq = $('#filtroTabla')?.value.trim() || '';
+  const visibles = fq ? new Set(buscarEst(fq, est).map(e => e.codigo)) : null;
+  const filas = est.filter(e => !visibles || visibles.has(e.codigo)).map(e => {
     const r = S.resultados[e.codigo];
     if (!r) return `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)} ${esc(e.nombre)}</td><td colspan="3" class="estado">Sin calificar</td><td><button class="btn" data-a="elegir" data-cod="${esc(e.codigo)}">Calificar</button></td></tr>`;
-    const g = calificar(r.respuestas, p.clave, p.escala); hechos++; suma += g.nota;
+    const g = calificar(r.respuestas, p.clave, p.escala);
     return `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)} ${esc(e.nombre)}</td><td class="n ok">${g.c}</td><td class="n mal">${g.m}</td><td class="n"><b>${g.nota.toFixed(1)}</b></td>
       <td><button class="btn" data-a="elegir" data-cod="${esc(e.codigo)}">Repetir</button> <button class="btn peligro" data-a="borrarRes" data-cod="${esc(e.codigo)}" aria-label="Borrar resultado">Borrar</button></td></tr>`;
   }).join('');
   $('#resumen').innerHTML = `<h3>Resultados</h3><p class="estado">${hechos} de ${est.length} calificados${hechos ? `, promedio ${(suma / hechos).toFixed(1)}` : ''}</p>`;
-  $('#tabla').innerHTML = est.length ? `<table><thead><tr><th>Código</th><th>Estudiante</th><th>Buenas</th><th>Malas</th><th>Nota</th><th></th></tr></thead><tbody>${filas}</tbody></table>` : '<p class="vacio">El curso no tiene estudiantes.</p>';
+  $('#tabla').innerHTML = est.length ? `<table><thead><tr><th>Código</th><th>Estudiante</th><th>Buenas</th><th>Malas</th><th>Nota</th><th></th></tr></thead><tbody>${filas || `<tr><td colspan="6" class="estado">Ningún estudiante coincide con “${esc(fq)}”.</td></tr>`}</tbody></table>` : '<p class="vacio">El curso no tiene estudiantes.</p>';
+}
+/* ---- búsqueda tipo Google: código o nombre, en cualquier orden, sin tildes y con tolerancia a un error ---- */
+function distancia(a, b, max) { // distancia de edición, corta si supera max
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]; let min = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < min) min = cur[j];
+    }
+    if (min > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+function puntaje(t, palabras) {
+  const tol = t.length >= 7 ? 2 : t.length >= 4 ? 1 : 0;
+  let m = 0;
+  for (const w of palabras) {
+    if (w === t) return 4;
+    if (w.startsWith(t)) m = Math.max(m, 3);
+    else if (t.length >= 3 && w.includes(t)) m = Math.max(m, 2);
+    else if (tol && !/^\d+$/.test(t) && (distancia(t, w, tol) <= tol || distancia(t, w.slice(0, t.length), tol) <= tol)) m = Math.max(m, 1);
+  }
+  return m;
+}
+function buscarEst(q, lista) {
+  const toks = norm(q).split(/[\s,;.]+/).filter(Boolean);
+  if (!toks.length) return [];
+  const out = [];
+  for (const e of lista) {
+    const palabras = norm(`${e.codigo} ${e.apellido} ${e.nombre}`).split(/\s+/).filter(Boolean);
+    let s = 0, ok = true;
+    for (const t of toks) { const v = puntaje(t, palabras); if (!v) { ok = false; break; } s += v; }
+    if (ok) out.push({ e, s: s + (norm(e.codigo) === norm(q) ? 100 : 0) });
+  }
+  return out.sort((a, b) => b.s - a.s || (a.e.apellido + a.e.nombre).localeCompare(b.e.apellido + b.e.nombre, 'es')).map(r => r.e);
+}
+function resaltar(texto, toks) {
+  return String(texto).split(/(\s+)/).map(w => {
+    const n = norm(w);
+    const t = toks.filter(t => n.startsWith(t)).sort((a, b) => b.length - a.length)[0];
+    return t ? `<mark>${esc(w.slice(0, t.length))}</mark>${esc(w.slice(t.length))}` : esc(w);
+  }).join('');
+}
+const estudiantesPrueba = () => { const p = prueba(); return p ? (curso(p.cursoId)?.estudiantes || []) : []; };
+function mostrarSug() {
+  const inp = $('#codInput'), ul = $('#sug'); if (!inp || !ul) return;
+  const q = inp.value.trim();
+  if (!q || S.sel) { ul.hidden = true; inp.setAttribute('aria-expanded', 'false'); return; }
+  S.sugLista = buscarEst(q, estudiantesPrueba()).slice(0, 8);
+  if (S.sugIdx >= S.sugLista.length) S.sugIdx = 0;
+  const toks = norm(q).split(/[\s,;.]+/).filter(Boolean);
+  ul.innerHTML = S.sugLista.length ? S.sugLista.map((e, i) => {
+    const r = S.resultados[e.codigo];
+    const nota = r ? calificar(r.respuestas, prueba().clave, prueba().escala).nota.toFixed(1) : '';
+    return `<li role="option" id="sug${i}" class="${i === S.sugIdx ? 'act' : ''}" aria-selected="${i === S.sugIdx}" data-a="pick" data-cod="${esc(e.codigo)}">
+      <span><b>${resaltar(e.apellido + ' ' + e.nombre, toks)}</b><br><small>${resaltar(e.codigo, toks)}</small></span>
+      ${r ? `<small class="hecho">Calificado: ${nota}</small>` : '<small>Sin calificar</small>'}</li>`;
+  }).join('') : `<li class="nada">No se encontró ningún estudiante con “${esc(q)}”.</li>`;
+  ul.hidden = false; inp.setAttribute('aria-expanded', 'true');
+  inp.setAttribute('aria-activedescendant', S.sugLista.length ? 'sug' + S.sugIdx : '');
+}
+function elegirEstudiante(codigo) {
+  const e = estudiantesPrueba().find(x => x.codigo === codigo), inp = $('#codInput'); if (!e || !inp) return;
+  S.sel = codigo; S.scan = null; S.sugIdx = 0;
+  inp.value = `${e.apellido} ${e.nombre}`.trim();
+  mostrarSug(); pintarScan();
 }
 function estudianteActual() {
-  const p = prueba(), inp = $('#codInput'); if (!p || !inp) return null;
-  const v = inp.value.trim();
-  return (curso(p.cursoId)?.estudiantes || []).find(e => e.codigo === v) || null;
+  const lista = estudiantesPrueba(), inp = $('#codInput'); if (!inp) return null;
+  return lista.find(e => e.codigo === S.sel) || lista.find(e => e.codigo === inp.value.trim()) || null;
 }
 function actualizarEstudiante() {
   const e = estudianteActual(), info = $('#estInfo'), btn = $('#btnScan'), inp = $('#codInput');
@@ -660,7 +748,7 @@ function actualizarEstudiante() {
   if (e) {
     const r = S.resultados[e.codigo];
     info.innerHTML = `<p class="estudiante">${esc(e.apellido)} ${esc(e.nombre)}</p>${r ? '<p class="aviso">Este estudiante ya tiene calificación. Si escanea de nuevo, se reemplaza.</p>' : ''}`;
-  } else info.innerHTML = v ? '<p class="err">No hay ningún estudiante con ese código en el curso.</p>' : '';
+  } else info.innerHTML = v ? '<p class="estado">Elija un estudiante de la lista para poder escanear su hoja.</p>' : '';
 }
 function pintarScan() {
   const box = $('#scanBox'); if (!box) return;
@@ -777,7 +865,7 @@ function exportar() {
 /* ---------------- abrir prueba ---------------- */
 function abrirPrueba(id) {
   if (S.unsubRes) S.unsubRes();
-  S.pruebaId = id; S.resultados = {}; S.scan = null; S.view = 'prueba'; S.msg = '';
+  S.pruebaId = id; S.resultados = {}; S.scan = null; S.sel = null; S.view = 'prueba'; S.msg = '';
   render();
   S.unsubRes = onSnapshot(collection(db, ruta('pruebas', id, 'resultados')), snap => {
     S.resultados = {};
@@ -879,7 +967,8 @@ const A = {
   abrirPrueba(el) { abrirPrueba(el.dataset.id); },
   imprimir(el) { imprimir(el.dataset.modo); },
   exportar() { exportar(); },
-  elegir(el) { const i = $('#codInput'); i.value = el.dataset.cod; S.scan = null; pintarScan(); i.scrollIntoView({ behavior: 'smooth', block: 'center' }); },
+  elegir(el) { elegirEstudiante(el.dataset.cod); $('#codInput').scrollIntoView({ behavior: 'smooth', block: 'center' }); },
+  pick(el) { elegirEstudiante(el.dataset.cod); },
   marcaScan(el) {
     const q = +el.dataset.q, s = S.scan;
     s.respuestas[q] = s.respuestas[q] === el.dataset.l ? '' : el.dataset.l;
@@ -894,7 +983,7 @@ const A = {
         codigo: s.est.codigo, apellido: s.est.apellido, nombre: s.est.nombre, respuestas: s.respuestas,
         buenas: g.c, malas: g.m, enBlanco: g.b, nota: g.nota, fecha: serverTimestamp()
       });
-      S.scan = null; $('#codInput').value = ''; pintarScan(); $('#codInput').focus();
+      S.scan = null; S.sel = null; $('#codInput').value = ''; pintarScan(); mostrarSug(); $('#codInput').focus();
     } catch (e) { s.error = 'No se pudo guardar: ' + e.message; pintarScan(); }
   },
   async borrarRes(el) {
@@ -904,14 +993,32 @@ const A = {
 };
 
 document.addEventListener('click', e => {
+  if (!e.target.closest('.buscador') && $('#sug')) { $('#sug').hidden = true; $('#codInput')?.setAttribute('aria-expanded', 'false'); }
   const el = e.target.closest('[data-a]'); if (!el || !A[el.dataset.a]) return;
   if (el.tagName === 'LI' || el.tagName === 'BUTTON') e.preventDefault();
   A[el.dataset.a](el, e);
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.target.id === 'lgPass' || e.target.id === 'lgEmail')) A.entrar();
+  if (e.target.id === 'codInput') {
+    const n = (S.sugLista || []).length, ul = $('#sug');
+    if (e.key === 'ArrowDown' && n) { e.preventDefault(); S.sugIdx = (S.sugIdx + 1) % n; mostrarSug(); }
+    else if (e.key === 'ArrowUp' && n) { e.preventDefault(); S.sugIdx = (S.sugIdx - 1 + n) % n; mostrarSug(); }
+    else if (e.key === 'Enter' && ul && !ul.hidden && n) { e.preventDefault(); elegirEstudiante(S.sugLista[S.sugIdx].codigo); }
+    else if (e.key === 'Escape' && ul) { ul.hidden = true; }
+  }
 });
-document.addEventListener('input', e => { if (e.target.id === 'codInput') { if (S.scan && !S.scan.cargando) { S.scan = null; } pintarScan(); } });
+document.addEventListener('input', e => {
+  if (e.target.id === 'codInput') {
+    S.sel = null; S.sugIdx = 0;
+    if (S.scan && !S.scan.cargando) S.scan = null;
+    const v = e.target.value.trim(), exacto = estudiantesPrueba().find(x => norm(x.codigo) === norm(v));
+    if (exacto && /\d/.test(v)) S.sel = exacto.codigo;   // código completo (o lector de código de barras): se elige solo
+    pintarScan(); mostrarSug();
+  }
+  if (e.target.id === 'filtroTabla') actualizarPrueba();
+});
+document.addEventListener('focusin', e => { if (e.target.id === 'codInput') mostrarSug(); });
 document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'cArchivo' && t.files[0]) {
