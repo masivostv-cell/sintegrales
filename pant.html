@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pantalla del local</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #1b1030;
+    --text: #f3eeff;
+    --muted: #b3a6cf;
+    --accent: #ffc43d;
+    font-family: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--text); overflow: hidden; }
+  body.idle, body.idle * { cursor: none !important; }
+
+  .app { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
+  @media (orientation: portrait) { .app { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+
+  .half { position: relative; overflow: hidden; background: #000; }
+  .layer { position: absolute; inset: 0; opacity: 0; }
+  .layer iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  /* Capa invisible: nadie pausa los videos tocando la pantalla */
+  .shield { position: absolute; inset: 0; z-index: 5; }
+
+  .status {
+    position: absolute; inset: 0; z-index: 4;
+    display: grid; place-items: center; padding: 2rem; text-align: center;
+    font-size: clamp(1.1rem, 2.2vw, 1.8rem); font-weight: 800; color: var(--muted);
+    background: radial-gradient(circle at 50% 40%, #31214f, var(--bg) 70%);
+  }
+  .status[hidden] { display: none; }
+
+  #start {
+    position: fixed; inset: 0; z-index: 10; width: 100%; border: 0;
+    display: grid; place-items: center; align-content: center; gap: .6rem;
+    background: rgba(27, 16, 48, .94); color: var(--text);
+    font: inherit; font-size: clamp(1.6rem, 4vw, 3rem); font-weight: 800; cursor: pointer;
+  }
+  #start small { font-size: 1rem; font-weight: 600; color: var(--muted); }
+  #start[hidden] { display: none; }
+  #start:focus-visible { outline: 3px solid var(--accent); outline-offset: -6px; }
+</style>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+</head>
+<body>
+<div class="app">
+  <section class="half" aria-label="Música">
+    <div class="layer" id="L0"><div id="P0"></div></div>
+    <div class="layer" id="L1"><div id="P1"></div></div>
+    <div class="status" id="musicStatus">Conectando…</div>
+    <div class="shield"></div>
+  </section>
+  <section class="half" aria-label="Publicidad">
+    <div class="layer" id="LA" style="opacity:1"><div id="AD"></div></div>
+    <div class="status" id="adStatus">Conectando…</div>
+    <div class="shield"></div>
+  </section>
+</div>
+
+<button id="start" hidden>Iniciar la música<small>El navegador necesita un clic para reproducir con sonido</small></button>
+
+<script>
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const doc = (name) => db.collection('pantalla').doc(name);
+  const $ = (id) => document.getElementById(id);
+  const toList = (v) => (Array.isArray(v) ? v : Object.values(v || {})).filter(Boolean);
+
+  // ---------- Estado ----------
+  let playlist = [], ads = [], settings = { crossfade: 6, volume: 100 };
+  let playlistLoaded = false;
+  const players = [], ready = [false, false];
+  let active = 0;          // reproductor que suena ahora (0 o 1)
+  let current = null;      // canción actual
+  let lastIndex = -1;      // posición de la canción actual en la lista
+  let pending = null;      // canción cargando en el reproductor de reserva
+  let queued = null;       // pedido que llegó durante un crossfade
+  let fadeTimer = null, pendingTimeout = null;
+  let started = false, autoTried = false, errorsInRow = 0;
+  let adPlayer = null, adReady = false, adCurrent = null;
+
+  const CF = () => Math.min(15, Math.max(0, Number(settings.crossfade) || 0));
+  const VOL = () => Math.min(100, Math.max(0, Number(settings.volume ?? 100)));
+  const L = [$('L0'), $('L1')];
+
+  // ---------- Firebase ----------
+  doc('playlist').onSnapshot((s) => {
+    playlist = toList(s.data()?.items);
+    playlistLoaded = true;
+    if (current) {
+      const i = playlist.findIndex((x) => x.uid === current.uid);
+      if (i >= 0) lastIndex = i;
+    }
+    musicStatus();
+    tryAuto();
+    if (started && !current) playFirst();
+  }, (e) => { $('musicStatus').textContent = 'Sin conexión con Firebase: ' + e.message; });
+
+  doc('ads').onSnapshot((s) => {
+    ads = toList(s.data()?.items);
+    syncAds();
+  });
+
+  doc('settings').onSnapshot((s) => {
+    settings = Object.assign({ crossfade: 6, volume: 100 }, s.data() || {});
+    if (!fadeTimer && ready[active]) players[active].setVolume(VOL());
+  });
+
+  let firstCommand = true;
+  doc('command').onSnapshot((s) => {
+    if (firstCommand) { firstCommand = false; return; } // ignora el pedido viejo al cargar
+    const c = s.data();
+    if (!c || !started) return;
+    if (c.action === 'next') transitionTo(nextItem());
+    if (c.action === 'play') {
+      const it = playlist.find((x) => x.uid === c.uid);
+      if (it) transitionTo(it);
+    }
+  });
+
+  // ---------- YouTube ----------
+  const tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+
+  const baseVars = { controls: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, disablekb: 1, fs: 0 };
+
+  window.onYouTubeIframeAPIReady = () => {
+    [0, 1].forEach((i) => {
+      players[i] = new YT.Player('P' + i, {
+        playerVars: { ...baseVars, autoplay: 0 },
+        events: {
+          onReady: () => { ready[i] = true; tryAuto(); },
+          onStateChange: (e) => onState(i, e.data),
+          onError: () => onError(i)
+        }
+      });
+    });
+
+    adPlayer = new YT.Player('AD', {
+      playerVars: { ...baseVars, autoplay: 1, mute: 1 },
+      events: {
+        onReady: (e) => { adReady = true; e.target.mute(); syncAds(); },
+        onStateChange: (e) => {
+          e.target.mute();
+          if (e.data === YT.PlayerState.ENDED) nextAd();
+          if (e.data === YT.PlayerState.PAUSED) e.target.playVideo();
+        },
+        onError: () => setTimeout(nextAd, 1000)
+      }
+    });
+    // La publicidad siempre muda, pase lo que pase
+    setInterval(() => { try { if (!adPlayer.isMuted()) adPlayer.mute(); } catch (e) {} }, 1500);
+  };
+
+  // ---------- Publicidad ----------
+  function syncAds() {
+    if (!adReady) return;
+    if (!ads.length) {
+      adCurrent = null;
+      adPlayer.stopVideo();
+      $('adStatus').textContent = 'Agrega videos de publicidad desde el panel de control';
+      $('adStatus').hidden = false;
+      return;
+    }
+    $('adStatus').hidden = true;
+    if (adCurrent && ads.some((a) => a.uid === adCurrent.uid)) return; // sigue la que está
+    playAd(ads[0]);
+  }
+  function nextAd() {
+    if (!ads.length) return;
+    const i = ads.findIndex((a) => a.uid === adCurrent?.uid);
+    playAd(ads[(i + 1) % ads.length]); // al final vuelve a la primera
+  }
+  function playAd(a) {
+    adCurrent = a;
+    adPlayer.mute();
+    adPlayer.loadVideoById(a.id);
+  }
+
+  // ---------- Música ----------
+  function musicStatus() {
+    const s = $('musicStatus');
+    if (!playlist.length) { s.textContent = 'Agrega canciones desde el panel de control'; s.hidden = false; }
+    else if (current) s.hidden = true;
+    else { s.textContent = 'Preparando la música…'; s.hidden = false; }
+  }
+
+  function tryAuto() {
+    if (autoTried || !ready[0] || !ready[1] || !playlistLoaded) return;
+    autoTried = true;
+    begin();
+  }
+
+  function begin() {
+    started = true;
+    $('start').hidden = true;
+    if (!current) playFirst();
+    else players[active].playVideo();
+    checkPlaying();
+  }
+
+  // Si el navegador bloqueó el sonido, pide un clic
+  function checkPlaying() {
+    setTimeout(() => {
+      if (!current) return;
+      if (players[active].getPlayerState() !== YT.PlayerState.PLAYING) $('start').hidden = false;
+    }, 4000);
+  }
+
+  function playFirst() {
+    if (!playlist.length) { musicStatus(); return; }
+    let i = 0;
+    try {
+      const saved = localStorage.getItem('pantalla-ultima');
+      const si = playlist.findIndex((x) => x.uid === saved);
+      if (si >= 0) i = si;
+    } catch (e) {}
+    const p = players[active];
+    current = playlist[i];
+    lastIndex = i;
+    p.unMute();
+    p.setVolume(VOL());
+    p.loadVideoById(current.id);
+    L[active].style.opacity = 1;
+    L[1 - active].style.opacity = 0;
+    remember();
+    musicStatus();
+    checkPlaying();
+  }
+
+  function nextItem() {
+    if (!playlist.length) return null;
+    const i = playlist.findIndex((x) => x.uid === current?.uid);
+    if (i < 0) return playlist[Math.max(0, lastIndex) % playlist.length]; // la actual la borraron
+    return playlist[(i + 1) % playlist.length]; // al final vuelve a la primera
+  }
+
+  // Carga la siguiente en el reproductor de reserva; cuando arranca, empieza el crossfade
+  function transitionTo(item) {
+    if (!item) return;
+    if (fadeTimer) { queued = item; return; }
+    const s = 1 - active;
+    pending = item;
+    players[s].unMute();
+    players[s].setVolume(0);
+    players[s].loadVideoById(item.id);
+    clearTimeout(pendingTimeout);
+    pendingTimeout = setTimeout(() => { if (pending === item && !fadeTimer) onError(s); }, 12000);
+  }
+
+  function beginFade() {
+    clearTimeout(pendingTimeout);
+    const from = active, to = 1 - active;
+    const ended = players[from].getPlayerState() === YT.PlayerState.ENDED;
+    const dur = (ended ? 0.5 : Math.max(0.5, CF())) * 1000;
+    const t0 = performance.now();
+    L[to].style.zIndex = 2;
+    L[from].style.zIndex = 1;
+    fadeTimer = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / dur);
+      const v = VOL();
+      try {
+        players[from].setVolume(Math.round(v * (1 - k)));
+        players[to].setVolume(Math.round(v * k));
+      } catch (e) {}
+      L[to].style.opacity = k;
+      if (k >= 1) {
+        clearInterval(fadeTimer);
+        fadeTimer = null;
+        players[from].stopVideo();
+        L[from].style.opacity = 0;
+        active = to;
+        current = pending;
+        pending = null;
+        lastIndex = playlist.findIndex((x) => x.uid === current.uid);
+        errorsInRow = 0;
+        remember();
+        musicStatus();
+        if (queued) { const q = queued; queued = null; transitionTo(q); }
+      }
+    }, 50);
+  }
+
+  function onState(i, st) {
+    const S = YT.PlayerState;
+    if (i === 1 - active && pending && st === S.PLAYING && !fadeTimer) beginFade();
+    if (i !== active) return;
+    if (st === S.ENDED && !pending) transitionTo(nextItem()); // sin crossfade o video corto
+    if (st === S.PAUSED && started && !fadeTimer) players[i].playVideo(); // que nunca se pare
+    if (st === S.PLAYING) $('start').hidden = true;
+  }
+
+  function onError(i) {
+    errorsInRow++;
+    if (errorsInRow > playlist.length + 1) {
+      $('musicStatus').textContent = 'Ningún video de la lista se puede reproducir. Revisa los enlaces en el panel.';
+      $('musicStatus').hidden = false;
+      return;
+    }
+    if (i === 1 - active && pending) {
+      // la siguiente no se puede embeber: salta a la que viene después
+      const bad = pending;
+      pending = null;
+      const idx = playlist.findIndex((x) => x.uid === bad.uid);
+      setTimeout(() => transitionTo(playlist[(idx + 1) % playlist.length]), 500);
+    } else if (i === active && !pending) {
+      setTimeout(() => transitionTo(nextItem()), 500);
+    }
+  }
+
+  // Empieza el crossfade unos segundos antes de que termine la canción
+  setInterval(() => {
+    if (!started || !current || pending || fadeTimer || !ready[active] || CF() === 0) return;
+    const p = players[active];
+    if (p.getPlayerState() !== YT.PlayerState.PLAYING) return;
+    const d = p.getDuration(), t = p.getCurrentTime();
+    if (d > 0 && d - t <= CF() + 1) transitionTo(nextItem());
+  }, 250);
+
+  function remember() {
+    try { localStorage.setItem('pantalla-ultima', current.uid); } catch (e) {}
+  }
+
+  // ---------- Pantalla ----------
+  $('start').addEventListener('click', () => {
+    document.documentElement.requestFullscreen?.().catch(() => {});
+    begin();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'f' || e.key === 'F') {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen().catch(() => {});
+    }
+  });
+
+  let idleTimer;
+  document.addEventListener('mousemove', () => {
+    document.body.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
+  });
+</script>
+</body>
+</html>
