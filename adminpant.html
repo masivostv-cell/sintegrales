@@ -52,6 +52,9 @@
   .login .link { background: none; border: 0; padding: 0; margin-top: .9rem; color: var(--muted); text-decoration: underline; font-size: .9rem; }
   .login .error { color: var(--danger); }
 
+  .code-card { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .code-label { color: var(--muted); font-size: .9rem; }
+  .code { font-size: 3rem; font-weight: 800; letter-spacing: .25em; color: var(--accent); line-height: 1.1; margin: .1rem 0 .3rem; }
   .controls { display: grid; grid-template-columns: auto 1fr 1fr; gap: 1rem 1.4rem; align-items: center; }
   @media (max-width: 600px) { .controls { grid-template-columns: 1fr; } }
   .slider label { display: flex; justify-content: space-between; font-size: .9rem; color: var(--muted); }
@@ -102,7 +105,7 @@
   </header>
 
   <form class="card login" id="login">
-    <p id="loginMsg">Entra con la misma cuenta que pusiste en la pantalla. Cada cuenta tiene su propia música y publicidad.</p>
+    <p id="loginMsg">Entra con tu cuenta para manejar la música y la publicidad. Cada cuenta tiene su propia pantalla.</p>
     <button class="btn primary" id="btnGoogle" type="button">Entrar con Google</button>
     <div class="sep">o con correo</div>
     <label for="email">Correo</label>
@@ -114,6 +117,15 @@
   </form>
 
   <main id="app" hidden>
+    <div class="card code-card">
+      <div>
+        <div class="code-label">Código de tu pantalla</div>
+        <div class="code" id="codeView">····</div>
+        <div class="hint">Escríbelo en la pantalla, en tudominio.com/pant. Solo se pide la primera vez.</div>
+      </div>
+      <button class="btn" id="btnNewCode">Cambiar código</button>
+    </div>
+
     <div class="card controls">
       <button class="btn primary" id="btnSkip">Saltar canción</button>
       <div class="slider">
@@ -207,9 +219,76 @@
     if (ok && !listening) { signedUid = u.uid; listen(u.uid); }
   });
 
-  function listen(uid) {
+  // ---------- Código de 4 números ----------
+  const screenRef = (code) => db.collection('pantallas').doc(code);
+  const ts = () => firebase.firestore.FieldValue.serverTimestamp();
+  const NAMES = ['playlist', 'ads', 'settings'];
+
+  // Reserva un código libre para esta cuenta
+  async function newCode(uid) {
+    for (let i = 0; i < 40; i++) {
+      const c = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+      try {
+        const snap = await screenRef(c).get();
+        if (snap.exists) continue;
+        await screenRef(c).set({ owner: uid, created: ts() }); // falla si otro lo tomó
+        return c;
+      } catch (e) { /* ocupado: probar otro */ }
+    }
+    throw new Error('No se encontró un código libre. Intenta de nuevo.');
+  }
+
+  async function ensureCode(uid) {
+    const uref = db.collection('users').doc(uid);
+    const u = await uref.get();
+    const code = u.exists ? u.data().code : null;
+    if (code) {
+      const p = await screenRef(code).get();
+      if (p.exists && p.data().owner === uid) return code;
+    }
+    const c = await newCode(uid);
+    await uref.set({ code: c }, { merge: true });
+    // Trae lo que hubieras agregado en la versión anterior
+    for (const n of NAMES) {
+      try {
+        const old = await uref.collection('pantalla').doc(n).get();
+        if (old.exists) await screenRef(c).collection('datos').doc(n).set(old.data());
+      } catch (e) {}
+    }
+    return c;
+  }
+
+  $('btnNewCode').onclick = async () => {
+    if (!confirm('¿Cambiar el código? Las pantallas conectadas te pedirán el código nuevo.')) return;
+    $('btnNewCode').disabled = true;
+    try {
+      const uid = signedUid, old = currentCode;
+      const c = await newCode(uid);
+      for (const n of NAMES) {
+        const d = await screenRef(old).collection('datos').doc(n).get();
+        if (d.exists) await screenRef(c).collection('datos').doc(n).set(d.data());
+      }
+      await db.collection('users').doc(uid).set({ code: c }, { merge: true });
+      for (const n of [...NAMES, 'command']) await screenRef(old).collection('datos').doc(n).delete().catch(() => {});
+      await screenRef(old).delete();
+      location.reload();
+    } catch (e) {
+      toast('No se pudo cambiar: ' + e.message);
+      $('btnNewCode').disabled = false;
+    }
+  };
+
+  let currentCode = null;
+  async function listen(uid) {
     listening = true;
-    doc = (name) => db.collection('users').doc(uid).collection('pantalla').doc(name);
+    try {
+      currentCode = await ensureCode(uid);
+    } catch (e) {
+      toast('No se pudo crear el código: ' + e.message);
+      return;
+    }
+    $('codeView').textContent = currentCode;
+    doc = (name) => screenRef(currentCode).collection('datos').doc(name);
     ['playlist', 'ads'].forEach((key) => {
       doc(key).onSnapshot((s) => {
         lists[key] = toList(s.data()?.items);

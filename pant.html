@@ -68,6 +68,11 @@
   .sep { display: flex; align-items: center; gap: .7rem; color: var(--muted); font-size: .85rem; margin: 1.1rem 0 .2rem; }
   .sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: #432f6b; }
   #btnMail { margin-top: 1rem; }
+  .login-box { text-align: center; }
+  #code {
+    font-size: clamp(2.4rem, 7vw, 3.6rem); font-weight: 800; text-align: center;
+    letter-spacing: .5em; padding: .5rem 0 .5rem .5em; margin-bottom: .2rem;
+  }
 
   /* Barra de cuenta: aparece solo al mover el mouse */
   #account {
@@ -86,7 +91,6 @@
   #start:focus-visible { outline: 3px solid var(--accent); outline-offset: -6px; }
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
 </head>
@@ -107,26 +111,20 @@
 
 <div id="login" hidden>
   <form class="login-box" id="loginForm">
-    <h1>Pantalla</h1>
-    <p id="loginMsg">Entra con la misma cuenta que usas en el panel de control.</p>
-    <button class="lbtn primary" type="button" id="btnGoogle">Entrar con Google</button>
-    <div class="sep">o con correo</div>
-    <label for="email">Correo</label>
-    <input id="email" type="email" autocomplete="username" required>
-    <label for="pass">Contraseña</label>
-    <input id="pass" type="password" autocomplete="current-password" required>
-    <button class="lbtn" type="submit" id="btnMail">Entrar con correo</button>
+    <h1>Conectar pantalla</h1>
+    <p id="loginMsg">Escribe el código de 4 números que aparece en el panel de control.</p>
+    <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-label="Código de 4 números">
+    <button class="lbtn primary" type="submit" id="btnMail">Conectar</button>
   </form>
 </div>
 
-<div id="account" hidden><span id="who"></span><button id="btnOut" type="button">Cambiar cuenta</button></div>
+<div id="account" hidden><span id="who"></span><button id="btnOut" type="button">Cambiar código</button></div>
 
 <button id="start" hidden>Iniciar la música<small>El navegador necesita un clic para reproducir con sonido</small></button>
 
 <script>
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
-  const auth = firebase.auth();
   let doc = null; // apunta a los datos de la cuenta con la que se entró
   const $ = (id) => document.getElementById(id);
   const toList = (v) => (Array.isArray(v) ? v : Object.values(v || {})).filter(Boolean);
@@ -149,44 +147,67 @@
   const L = [$('L0'), $('L1')];
 
   // ---------- Firebase ----------
-  // ---------- Cuenta ----------
-  let signedUid = null;
+  // ---------- Código de la pantalla ----------
+  let signedUid = null; // aquí queda el código de 4 números
+  const screenDoc = (code) => db.collection('pantallas').doc(code);
+  const forget = () => { try { localStorage.removeItem('pantalla-codigo'); } catch (e) {} };
 
   function loginMsg(text, isError) {
     $('loginMsg').textContent = text;
     $('loginMsg').classList.toggle('error', !!isError);
   }
-  function loginError(err) {
-    const bad = ['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'];
-    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
-    loginMsg(bad.includes(err.code) ? 'El correo o la contraseña no coinciden.' : 'No se pudo entrar: ' + err.message, true);
+  function askCode(msg, isError) {
+    $('login').hidden = false;
+    $('account').hidden = true;
+    $('musicStatus').textContent = 'Escribe el código para cargar tu música';
+    $('adStatus').textContent = 'Escribe el código para cargar tu publicidad';
+    if (msg) loginMsg(msg, isError);
+    $('code').value = '';
+    $('code').focus();
   }
 
-  $('btnGoogle').onclick = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(loginError);
-  $('loginForm').onsubmit = (e) => {
-    e.preventDefault();
-    auth.signInWithEmailAndPassword($('email').value.trim(), $('pass').value).catch(loginError);
-  };
-  $('btnOut').onclick = () => auth.signOut();
-
-  auth.onAuthStateChanged((u) => {
-    if (!u) {
-      if (signedUid) { location.reload(); return; } // cambió de cuenta: empezar limpio
-      $('login').hidden = false;
-      $('account').hidden = true;
-      $('musicStatus').textContent = 'Inicia sesión para cargar tu música';
-      $('adStatus').textContent = 'Inicia sesión para cargar tu publicidad';
+  let connecting = false;
+  async function connect(code) {
+    if (connecting || signedUid) return; // evita conectar dos veces
+    connecting = true;
+    $('btnMail').disabled = true;
+    try {
+      const snap = await screenDoc(code).get();
+      if (!snap.exists) { forget(); askCode('El código ' + code + ' no existe. Revísalo en el panel de control.', true); return; }
+    } catch (e) {
+      askCode('No hay conexión con Firebase. Revisa el internet y vuelve a intentar.', true);
       return;
-    }
+    } finally { $('btnMail').disabled = false; connecting = false; }
+
+    try { localStorage.setItem('pantalla-codigo', code); } catch (e) {}
+    signedUid = code;
     $('login').hidden = true;
     $('account').hidden = false;
-    $('who').textContent = u.email || u.displayName || 'Cuenta';
-    if (!signedUid) { signedUid = u.uid; startData(u.uid); }
-  });
+    $('who').textContent = 'Pantalla ' + code;
+    // Si desde el panel cambian el código, esta pantalla vuelve a pedirlo
+    screenDoc(code).onSnapshot((s) => { if (!s.exists) { forget(); location.reload(); } });
+    startData(code);
+  }
 
-  // ---------- Firebase (datos de esa cuenta) ----------
-  function startData(uid) {
-    doc = (name) => db.collection('users').doc(uid).collection('pantalla').doc(name);
+  $('code').addEventListener('input', () => {
+    $('code').value = $('code').value.replace(/\D/g, '').slice(0, 4);
+    if ($('code').value.length === 4) connect($('code').value); // conecta solo al poner el 4º número
+  });
+  $('loginForm').onsubmit = (e) => {
+    e.preventDefault();
+    const c = $('code').value;
+    if (c.length !== 4) { loginMsg('El código tiene 4 números.', true); return; }
+    connect(c);
+  };
+  $('btnOut').onclick = () => { forget(); location.reload(); };
+
+  let savedCode = null;
+  try { savedCode = localStorage.getItem('pantalla-codigo'); } catch (e) {}
+  if (savedCode) connect(savedCode); else askCode();
+
+  // ---------- Firebase (datos de esa pantalla) ----------
+  function startData(code) {
+    doc = (name) => screenDoc(code).collection('datos').doc(name);
 
     doc('playlist').onSnapshot((s) => {
       playlist = toList(s.data()?.items);
