@@ -18,10 +18,14 @@
 
   .app { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
   @media (orientation: portrait) { .app { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+  /* Solo música: el video ocupa toda la pantalla */
+  .app.solo { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .app.solo #adHalf { display: none; }
 
   .half { position: relative; overflow: hidden; background: #000; }
   .layer { position: absolute; inset: 0; opacity: 0; }
-  .layer iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .layer iframe { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border: 0; transform-origin: 0 0; }
+  .layer video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
   /* Capa invisible: nadie pausa los videos tocando la pantalla */
   .shield { position: absolute; inset: 0; z-index: 5; }
@@ -95,15 +99,16 @@
 <script src="firebase-config.js"></script>
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
   <section class="half" aria-label="Música">
     <div class="layer" id="L0"><div id="P0"></div></div>
     <div class="layer" id="L1"><div id="P1"></div></div>
     <div class="status" id="musicStatus">Conectando…</div>
     <div class="shield"></div>
   </section>
-  <section class="half" aria-label="Publicidad">
+  <section class="half" id="adHalf" aria-label="Publicidad">
     <div class="layer" id="LA" style="opacity:1"><div id="AD"></div></div>
+    <div class="layer" id="LV"><video id="adVideo" muted playsinline preload="auto"></video></div>
     <div class="status" id="adStatus">Conectando…</div>
     <div class="shield"></div>
   </section>
@@ -130,7 +135,7 @@
   const toList = (v) => (Array.isArray(v) ? v : Object.values(v || {})).filter(Boolean);
 
   // ---------- Estado ----------
-  let playlist = [], ads = [], settings = { crossfade: 6, volume: 100 };
+  let playlist = [], ads = [], settings = { crossfade: 6, volume: 100, musicQuality: 'media', adQuality: 'baja' };
   let playlistLoaded = false;
   const players = [], ready = [false, false];
   let active = 0;          // reproductor que suena ahora (0 o 1)
@@ -227,8 +232,10 @@
     });
 
     doc('settings').onSnapshot((s) => {
-      settings = Object.assign({ crossfade: 6, volume: 100 }, s.data() || {});
+      settings = Object.assign({ crossfade: 6, volume: 100, musicQuality: 'media', adQuality: 'baja' }, s.data() || {});
       if (!fadeTimer && ready[active]) players[active].setVolume(VOL());
+      applyLayout();
+      applyQuality();
     });
 
     let firstCommand = true;
@@ -256,7 +263,7 @@
       players[i] = new YT.Player('P' + i, {
         playerVars: { ...baseVars, autoplay: 0 },
         events: {
-          onReady: () => { ready[i] = true; tryAuto(); },
+          onReady: () => { ready[i] = true; applyQuality(); tryAuto(); },
           onStateChange: (e) => onState(i, e.data),
           onError: () => onError(i)
         }
@@ -266,43 +273,123 @@
     adPlayer = new YT.Player('AD', {
       playerVars: { ...baseVars, autoplay: 1, mute: 1 },
       events: {
-        onReady: (e) => { adReady = true; e.target.mute(); syncAds(); },
+        onReady: (e) => { adReady = true; e.target.mute(); applyQuality(); syncAds(); },
         onStateChange: (e) => {
           e.target.mute();
+          if (adCurrent?.type === 'mp4') return;
           if (e.data === YT.PlayerState.ENDED) nextAd();
-          if (e.data === YT.PlayerState.PAUSED) e.target.playVideo();
+          if (e.data === YT.PlayerState.PAUSED && !adsOff) e.target.playVideo();
         },
-        onError: () => setTimeout(nextAd, 1000)
+        onError: () => { if (adCurrent?.type !== 'mp4') setTimeout(nextAd, 1000); }
       }
     });
     // La publicidad siempre muda, pase lo que pase
     setInterval(() => { try { if (!adPlayer.isMuted()) adPlayer.mute(); } catch (e) {} }, 1500);
   };
 
+  // ---------- Calidad (menos datos = menos pausas) ----------
+  // YouTube elige la calidad según el tamaño del reproductor. Se dibuja pequeño
+  // y se agranda con CSS: se ve un poco menos nítido pero gasta mucho menos internet.
+  const QUALITY_WIDTH = { auto: 0, media: 854, baja: 640, minima: 426 };
+  function fitIframe(layer, level) {
+    const f = layer.querySelector('iframe');
+    if (!f) return;
+    const W = QUALITY_WIDTH[level] || 0;
+    const box = layer.getBoundingClientRect();
+    if (!W || box.width <= W) { f.style.width = '100%'; f.style.height = '100%'; f.style.transform = ''; return; }
+    const k = box.width / W;
+    f.style.width = W + 'px';
+    f.style.height = (box.height / k) + 'px';
+    f.style.transform = `scale(${k})`;
+  }
+  function applyQuality() {
+    fitIframe(L[0], settings.musicQuality);
+    fitIframe(L[1], settings.musicQuality);
+    fitIframe($('LA'), settings.adQuality);
+  }
+  window.addEventListener('resize', applyQuality);
+
   // ---------- Publicidad ----------
+  // Los videos MP4 se descargan completos una vez y luego se repiten sin usar internet
+  const adVideo = $('adVideo');
+  const blobCache = {};
+  async function cachedUrl(url) {
+    if (blobCache[url]) return blobCache[url];
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(r.status);
+      blobCache[url] = URL.createObjectURL(await r.blob());
+      return blobCache[url];
+    } catch (e) { return url; } // si no se puede guardar, se reproduce directo
+  }
+  adVideo.addEventListener('ended', () => nextAd());
+  adVideo.addEventListener('error', () => setTimeout(nextAd, 1000));
+  adVideo.addEventListener('volumechange', () => { adVideo.muted = true; });
+  adVideo.addEventListener('pause', () => { if (!adsOff && adCurrent?.type === 'mp4' && !adVideo.ended) adVideo.play().catch(() => {}); });
+  // Descarga por adelantado todas las publicidades MP4
+  function precacheAds() { ads.filter((a) => a.type === 'mp4').forEach((a) => cachedUrl(a.url)); }
+
+  // ---------- Con publicidad o solo música (se elige en el panel) ----------
+  let adsOff = false;
+  function applyLayout() {
+    const off = settings.layout === 'music';
+    if (off === adsOff) return;
+    adsOff = off;
+    $('app').classList.toggle('solo', off);
+    if (off) {
+      // la publicidad se detiene para no gastar internet
+      try { adPlayer?.pauseVideo(); } catch (e) {}
+      adVideo.pause();
+    } else if (adCurrent) {
+      playAd(adCurrent);
+    } else {
+      syncAds();
+    }
+    setTimeout(applyQuality, 50); // el video de música cambió de tamaño
+  }
+
   function syncAds() {
+    if (adsOff) return;
     if (!adReady) return;
     if (!signedUid) return;
     if (!ads.length) {
       adCurrent = null;
       adPlayer.stopVideo();
+      adVideo.pause(); adVideo.removeAttribute('src');
       $('adStatus').textContent = 'Agrega videos de publicidad desde el panel de control';
       $('adStatus').hidden = false;
       return;
     }
     $('adStatus').hidden = true;
+    precacheAds();
     if (adCurrent && ads.some((a) => a.uid === adCurrent.uid)) return; // sigue la que está
     playAd(ads[0]);
   }
   function nextAd() {
-    if (!ads.length) return;
+    if (!ads.length || adsOff) return;
     const i = ads.findIndex((a) => a.uid === adCurrent?.uid);
     playAd(ads[(i + 1) % ads.length]); // al final vuelve a la primera
   }
-  function playAd(a) {
+  async function playAd(a) {
     adCurrent = a;
-    adPlayer.mute();
-    adPlayer.loadVideoById(a.id);
+    if (adsOff) return;
+    if (a.type === 'mp4') {
+      adPlayer.stopVideo();
+      $('LA').style.opacity = 0;
+      $('LV').style.opacity = 1;
+      const src = await cachedUrl(a.url);
+      if (adCurrent !== a) return;
+      if (adVideo.src !== src) adVideo.src = src;
+      adVideo.muted = true;
+      adVideo.currentTime = 0;
+      adVideo.play().catch(() => {});
+    } else {
+      adVideo.pause();
+      $('LV').style.opacity = 0;
+      $('LA').style.opacity = 1;
+      adPlayer.mute();
+      adPlayer.loadVideoById(a.id);
+    }
   }
 
   // ---------- Música ----------
@@ -363,15 +450,37 @@
     return playlist[(i + 1) % playlist.length]; // al final vuelve a la primera
   }
 
-  // Carga la siguiente en el reproductor de reserva; cuando arranca, empieza el crossfade
+  // Precarga: 40 s antes de terminar, la siguiente se carga en silencio y en pausa
+  // para que ya tenga buffer cuando le toque
+  const PRELOAD_SECONDS = 40;
+  let preItem = null, preReady = false, preStarting = false;
+
+  function preload(item) {
+    if (!item) return;
+    const s = 1 - active;
+    preItem = item; preReady = false; preStarting = true;
+    players[s].mute();
+    players[s].setVolume(0);
+    players[s].loadVideoById(item.id);
+  }
+  function clearPreload() { preItem = null; preReady = false; preStarting = false; }
+
+  // Pasa a la siguiente en el reproductor de reserva; cuando arranca, empieza el crossfade
   function transitionTo(item) {
     if (!item) return;
     if (fadeTimer) { queued = item; return; }
     const s = 1 - active;
     pending = item;
+    const wasPreloaded = preItem && preItem.uid === item.uid && preReady;
+    clearPreload();
     players[s].unMute();
     players[s].setVolume(0);
-    players[s].loadVideoById(item.id);
+    if (wasPreloaded) {
+      players[s].seekTo(0, true);
+      players[s].playVideo();
+    } else {
+      players[s].loadVideoById(item.id);
+    }
     clearTimeout(pendingTimeout);
     pendingTimeout = setTimeout(() => { if (pending === item && !fadeTimer) onError(s); }, 12000);
   }
@@ -402,6 +511,7 @@
         pending = null;
         lastIndex = playlist.findIndex((x) => x.uid === current.uid);
         errorsInRow = 0;
+        clearPreload();
         remember();
         musicStatus();
         if (queued) { const q = queued; queued = null; transitionTo(q); }
@@ -411,6 +521,13 @@
 
   function onState(i, st) {
     const S = YT.PlayerState;
+    // La precargada empezó a sonar en silencio: se pausa y sigue llenando el buffer
+    if (i === 1 - active && preStarting && !pending && st === S.PLAYING) {
+      players[i].pauseVideo();
+      preStarting = false;
+      preReady = true;
+      return;
+    }
     if (i === 1 - active && pending && st === S.PLAYING && !fadeTimer) beginFade();
     if (i !== active) return;
     if (st === S.ENDED && !pending) transitionTo(nextItem()); // sin crossfade o video corto
@@ -419,6 +536,7 @@
   }
 
   function onError(i) {
+    if (i === 1 - active && preItem && !pending) { clearPreload(); return; } // se resuelve al llegar su turno
     errorsInRow++;
     if (errorsInRow > playlist.length + 1) {
       $('musicStatus').textContent = 'Ningún video de la lista se puede reproducir. Revisa los enlaces en el panel.';
@@ -436,13 +554,18 @@
     }
   }
 
-  // Empieza el crossfade unos segundos antes de que termine la canción
+  // Precarga la siguiente y empieza el crossfade unos segundos antes de que termine
   setInterval(() => {
-    if (!started || !current || pending || fadeTimer || !ready[active] || CF() === 0) return;
+    if (!started || !current || pending || fadeTimer || !ready[active] || !ready[1 - active]) return;
     const p = players[active];
     if (p.getPlayerState() !== YT.PlayerState.PLAYING) return;
     const d = p.getDuration(), t = p.getCurrentTime();
-    if (d > 0 && d - t <= CF() + 1) transitionTo(nextItem());
+    if (!(d > 0)) return;
+    const left = d - t;
+    const nxt = nextItem();
+    if (nxt && !preItem && left <= PRELOAD_SECONDS + CF() && left > CF() + 3) preload(nxt);
+    if (preItem && nxt && preItem.uid !== nxt.uid) clearPreload(); // cambiaron la lista
+    if (CF() > 0 && left <= CF() + 1) transitionTo(nxt);
   }, 250);
 
   function remember() {
