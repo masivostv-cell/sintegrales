@@ -716,7 +716,7 @@ function marco(contenido) {
 function render() {
   const v = { admin: vAdmin, pruebas: vPruebas, cursos: vCursos, curso: vCursoForm, pruebaForm: vPruebaForm, prueba: vPrueba }[S.view] || vPruebas;
   app.innerHTML = marco(v());
-  if (S.view === 'prueba') { actualizarPrueba(); pintarScan(); }
+  if (S.view === 'prueba') { actualizarPrueba(); pintarScan(); pintarDup(); }
   if (S.view === 'pruebaForm') { leerFormPrueba(); pintarClave(); pintarVista(); }
 }
 const tabs = () => `<div class="tabs" role="tablist">
@@ -913,8 +913,10 @@ function vPrueba() {
     <button class="btn" data-a="imprimir" data-modo="nombres">Imprimir hojas con nombres</button>
     <button class="btn" data-a="editarPrueba">Editar clave</button>
     <button class="btn pri" data-a="exportar">Exportar a Excel</button>
+    <button class="btn" data-a="mostrarDup">Duplicar para otro curso</button>
     <button class="btn peligro" data-a="borrarPrueba" data-id="${p.id}">Eliminar prueba</button>
   </div>
+  <div id="dupBox"></div>
   <div class="panel">
     <h3>Calificar</h3>
     <label class="f" for="codInput" style="margin-bottom:4px">Buscar estudiante por código o nombre</label>
@@ -931,6 +933,20 @@ function vPrueba() {
   <div class="panel"><div id="resumen"></div>
     <input id="filtroTabla" class="filtro" type="search" autocomplete="off" placeholder="Filtrar la tabla por código o nombre">
     <div class="tabla" id="tabla"></div></div>`;
+}
+function pintarDup() {
+  const box = $('#dupBox'), p = prueba(); if (!box || !p) return;
+  if (!S.dup) { box.innerHTML = ''; return; }
+  const otros = S.cursos.filter(c => c.id !== p.cursoId);
+  box.innerHTML = `<div class="panel">
+    <h3>Duplicar prueba</h3>
+    <p class="estado">Se copia todo: número de preguntas, opciones, clave de respuestas, nota máxima, tipo de hoja y encabezado. Las calificaciones no se copian. Elija uno o varios cursos.</p>
+    ${otros.length ? `<div class="acciones" style="margin-bottom:12px">${otros.map(c => `<label class="chip"><input type="checkbox" class="dupCurso" value="${c.id}"> ${esc(c.nombre)}</label>`).join('')}</div>
+      <label class="f">Nombre de las copias<input id="dupNombre" value="${esc(p.nombre)}"></label>
+      ${S.dupMsg ? `<p class="err">${esc(S.dupMsg)}</p>` : ''}
+      <div class="acciones"><button class="btn pri" data-a="hacerDup">Duplicar</button><button class="btn" data-a="cerrarDup">Cancelar</button></div>`
+    : `<p class="aviso">No tiene otros cursos. Cree primero el curso en “Cursos y estudiantes”.</p><button class="btn" data-a="cerrarDup">Cerrar</button>`}
+  </div>`;
 }
 function actualizarPrueba() {
   const p = prueba(); if (!p || !$('#tabla')) return;
@@ -1216,7 +1232,7 @@ function exportar() {
 /* ---------------- abrir prueba ---------------- */
 function abrirPrueba(id) {
   if (S.unsubRes) S.unsubRes();
-  S.pruebaId = id; S.resultados = {}; S.scan = null; S.sel = null; S.view = 'prueba'; S.msg = '';
+  S.pruebaId = id; S.resultados = {}; S.scan = null; S.sel = null; S.dup = false; S.dupMsg = ''; S.view = 'prueba'; S.msg = '';
   render();
   S.unsubRes = onSnapshot(collection(db, ruta('pruebas', id, 'resultados')), snap => {
     S.resultados = {};
@@ -1336,6 +1352,23 @@ const A = {
       if (f.id) { await updateDoc(doc(db, ruta('pruebas', f.id)), data); abrirPrueba(f.id); }
       else { const r = await addDoc(collection(db, ruta('pruebas')), { ...data, creada: serverTimestamp() }); S.pruebas.unshift({ id: r.id, ...data }); abrirPrueba(r.id); }
     } catch (e) { $('#claveErr').textContent = e.message; }
+  },
+  mostrarDup() { S.dup = !S.dup; S.dupMsg = ''; pintarDup(); if (S.dup) $('#dupBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); },
+  cerrarDup() { S.dup = false; pintarDup(); },
+  async hacerDup() {
+    const p = prueba(), ids = [...document.querySelectorAll('.dupCurso:checked')].map(x => x.value);
+    const nombre = $('#dupNombre').value.trim() || p.nombre;
+    if (!ids.length) { S.dupMsg = 'Elija al menos un curso.'; return pintarDup(); }
+    const base = { v: 2, hoja: p.hoja || 'propia', uN: p.uN || null, uOpt: p.uOpt || null, nombre, n: p.n, nOpt: p.nOpt, escala: p.escala, clave: [...p.clave],
+      colegio: p.colegio || '', docente: p.docente || '', materia: p.materia || '', periodo: p.periodo || '', fecha: p.fecha || '' };
+    try {
+      const b = writeBatch(db);
+      ids.forEach(cid => b.set(doc(collection(db, ruta('pruebas'))), { ...base, cursoId: cid, cursoNombre: curso(cid)?.nombre || '', creada: serverTimestamp() }));
+      await b.commit();
+      const nombres = ids.map(cid => curso(cid)?.nombre).join(', ');
+      S.dup = false; pintarDup();
+      S.msg = ''; alert(`Listo: se creó “${nombre}” para ${nombres}. La encuentra en “Mis pruebas”.`);
+    } catch (e) { S.dupMsg = 'No se pudo duplicar: ' + e.message; pintarDup(); }
   },
   async borrarPrueba(el) {
     const id = el?.dataset?.id || S.form?.id; if (!id) return;
