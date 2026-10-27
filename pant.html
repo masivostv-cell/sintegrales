@@ -235,6 +235,7 @@
       settings = Object.assign({ crossfade: 6, volume: 100, musicQuality: 'media', adQuality: 'baja' }, s.data() || {});
       if (!fadeTimer && ready[active]) players[active].setVolume(VOL());
       applyLayout();
+      applyLite();
       applyQuality();
     });
 
@@ -302,9 +303,26 @@
     f.style.height = (box.height / k) + 'px';
     f.style.transform = `scale(${k})`;
   }
+  // ---------- Modo liviano (Fire TV y equipos lentos) ----------
+  // Usa un solo reproductor: nunca hay dos videos de música cargando a la vez.
+  const IS_SLOW_DEVICE = /Silk|AFT|AFTM|AFTT|AFTS|Fire TV/i.test(navigator.userAgent);
+  const LITE = () => settings.lite === 'on' || (settings.lite !== 'off' && IS_SLOW_DEVICE);
+  let wasLite = null;
+  function applyLite() {
+    const lite = LITE();
+    if (lite === wasLite) return;
+    wasLite = lite;
+    if (lite) {
+      clearPreload();
+      try { players[1 - active].stopVideo(); } catch (e) {}
+      L[1 - active].style.opacity = 0;
+    }
+  }
+
   function applyQuality() {
-    fitIframe(L[0], settings.musicQuality);
-    fitIframe(L[1], settings.musicQuality);
+    const mq = LITE() ? 'minima' : settings.musicQuality;
+    fitIframe(L[0], mq);
+    fitIframe(L[1], mq);
     fitIframe($('LA'), settings.adQuality);
   }
   window.addEventListener('resize', applyQuality);
@@ -466,8 +484,49 @@
   function clearPreload() { preItem = null; preReady = false; preStarting = false; }
 
   // Pasa a la siguiente en el reproductor de reserva; cuando arranca, empieza el crossfade
+  // En modo liviano: baja el volumen, cambia de canción en el mismo reproductor y lo sube
+  let liteFadeIn = false;
+  function liteSwitch(item) {
+    if (fadeTimer) { queued = item; return; }
+    clearPreload();
+    const p = players[active];
+    const v = VOL();
+    const dur = Math.max(0.3, Math.min(CF(), 4)) * 1000;
+    const t0 = performance.now();
+    pending = item;
+    const finish = () => {
+      clearInterval(fadeTimer);
+      fadeTimer = null;
+      p.setVolume(0);
+      current = item;
+      pending = null;
+      lastIndex = playlist.findIndex((x) => x.uid === item.uid);
+      liteFadeIn = true;
+      p.loadVideoById(item.id);
+      remember();
+      musicStatus();
+      if (queued) { const q = queued; queued = null; setTimeout(() => liteSwitch(q), 300); }
+    };
+    if (p.getPlayerState() === YT.PlayerState.ENDED || CF() === 0) { fadeTimer = 1; finish(); return; }
+    fadeTimer = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / dur);
+      try { p.setVolume(Math.round(v * (1 - k))); } catch (e) {}
+      if (k >= 1) finish();
+    }, 100);
+  }
+  function liteRampUp() {
+    liteFadeIn = false;
+    const p = players[active], v = VOL(), t0 = performance.now();
+    const h = setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / 1500);
+      try { p.setVolume(Math.round(v * k)); } catch (e) {}
+      if (k >= 1) clearInterval(h);
+    }, 100);
+  }
+
   function transitionTo(item) {
     if (!item) return;
+    if (LITE()) { liteSwitch(item); return; }
     if (fadeTimer) { queued = item; return; }
     const s = 1 - active;
     pending = item;
@@ -532,7 +591,11 @@
     if (i !== active) return;
     if (st === S.ENDED && !pending) transitionTo(nextItem()); // sin crossfade o video corto
     if (st === S.PAUSED && started && !fadeTimer) players[i].playVideo(); // que nunca se pare
-    if (st === S.PLAYING) $('start').hidden = true;
+    if (st === S.PLAYING) {
+      $('start').hidden = true;
+      errorsInRow = 0;
+      if (liteFadeIn) liteRampUp();
+    }
   }
 
   function onError(i) {
@@ -556,13 +619,18 @@
 
   // Precarga la siguiente y empieza el crossfade unos segundos antes de que termine
   setInterval(() => {
-    if (!started || !current || pending || fadeTimer || !ready[active] || !ready[1 - active]) return;
+    if (!started || !current || pending || fadeTimer || !ready[active]) return;
+    if (!LITE() && !ready[1 - active]) return;
     const p = players[active];
     if (p.getPlayerState() !== YT.PlayerState.PLAYING) return;
     const d = p.getDuration(), t = p.getCurrentTime();
     if (!(d > 0)) return;
     const left = d - t;
     const nxt = nextItem();
+    if (LITE()) { // sin precarga, solo baja el volumen al final
+      if (CF() > 0 && left <= Math.min(CF(), 4) + 0.5) transitionTo(nxt);
+      return;
+    }
     if (nxt && !preItem && left <= PRELOAD_SECONDS + CF() && left > CF() + 3) preload(nxt);
     if (preItem && nxt && preItem.uid !== nxt.uid) clearPreload(); // cambiaron la lista
     if (CF() > 0 && left <= CF() + 1) transitionTo(nxt);

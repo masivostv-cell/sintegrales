@@ -154,6 +154,14 @@
         <input type="range" id="vol" min="0" max="100" step="5" value="100">
       </div>
       <div class="quality">
+        <label for="lite">Modo liviano</label>
+        <select id="lite">
+          <option value="auto">Automático (se activa en Fire TV)</option>
+          <option value="on">Activado</option>
+          <option value="off">Desactivado</option>
+        </select>
+      </div>
+      <div class="quality">
         <label for="mq">Calidad de la música</label>
         <select id="mq">
           <option value="auto">Máxima</option>
@@ -171,7 +179,7 @@
           <option value="minima">Mínima</option>
         </select>
       </div>
-      <p class="hint q-hint">Si las canciones se pausan, baja la calidad: el video se ve un poco menos nítido pero usa mucho menos internet.</p>
+      <p class="hint q-hint">Si las canciones se pausan, baja la calidad. En Fire TV o equipos lentos usa el modo liviano: carga un solo video de música a la vez y usa la calidad mínima. El cambio entre canciones baja y sube el volumen en vez de mezclar.</p>
     </div>
 
     <div class="tabs">
@@ -334,7 +342,7 @@
     });
     doc('settings').onSnapshot((s) => {
       const st = Object.assign({ crossfade: 6, volume: 100, musicQuality: 'media', adQuality: 'baja' }, s.data() || {});
-      $('mq').value = st.musicQuality; $('aq').value = st.adQuality;
+      $('mq').value = st.musicQuality; $('aq').value = st.adQuality; $('lite').value = st.lite || 'auto';
       document.querySelectorAll('.seg button').forEach((b) =>
         b.setAttribute('aria-checked', String(b.dataset.layout === (st.layout || 'split'))));
       $('cf').value = st.crossfade; $('cfVal').textContent = st.crossfade + ' s';
@@ -472,6 +480,7 @@
   $('cf').onchange = () => setting({ crossfade: +$('cf').value });
   $('vol').oninput = () => { $('volVal').textContent = $('vol').value; };
   $('mq').onchange = () => setting({ musicQuality: $('mq').value });
+  $('lite').onchange = () => setting({ lite: $('lite').value });
   $('aq').onchange = () => setting({ adQuality: $('aq').value });
   document.querySelectorAll('.seg button').forEach((b) => b.onclick = () => {
     setting({ layout: b.dataset.layout });
