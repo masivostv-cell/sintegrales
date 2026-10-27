@@ -41,8 +41,16 @@
   .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1rem; margin-bottom: 1rem; }
-  .login { text-align: center; padding: 3rem 1rem; }
-  .login p { color: var(--muted); }
+  .login { max-width: 380px; margin: 2rem auto; padding: 1.6rem; }
+  .login p { color: var(--muted); margin-top: 0; }
+  .login label { display: block; font-size: .9rem; color: var(--muted); margin: .8rem 0 .3rem; }
+  .login input { width: 100%; padding: .65rem .8rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .login .btn { width: 100%; margin-top: 1.1rem; }
+  .login #btnGoogle { margin-top: 0; }
+  .sep { display: flex; align-items: center; gap: .7rem; color: var(--muted); font-size: .85rem; margin: 1.1rem 0 .2rem; }
+  .sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .login .link { background: none; border: 0; padding: 0; margin-top: .9rem; color: var(--muted); text-decoration: underline; font-size: .9rem; }
+  .login .error { color: var(--danger); }
 
   .controls { display: grid; grid-template-columns: auto 1fr 1fr; gap: 1rem 1.4rem; align-items: center; }
   @media (max-width: 600px) { .controls { grid-template-columns: 1fr; } }
@@ -93,10 +101,17 @@
     <button class="btn" id="btnOut" hidden>Cerrar sesión</button>
   </header>
 
-  <div class="card login" id="login">
-    <p id="loginMsg">Entra con tu cuenta de Google para manejar la música y la publicidad.</p>
-    <button class="btn primary" id="btnIn">Entrar con Google</button>
-  </div>
+  <form class="card login" id="login">
+    <p id="loginMsg">Entra con la misma cuenta que pusiste en la pantalla. Cada cuenta tiene su propia música y publicidad.</p>
+    <button class="btn primary" id="btnGoogle" type="button">Entrar con Google</button>
+    <div class="sep">o con correo</div>
+    <label for="email">Correo</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="pass">Contraseña</label>
+    <input id="pass" type="password" autocomplete="current-password" required>
+    <button class="btn" id="btnIn" type="submit">Entrar con correo</button>
+    <button class="link" id="btnReset" type="button">Olvidé mi contraseña</button>
+  </form>
 
   <main id="app" hidden>
     <div class="card controls">
@@ -136,7 +151,7 @@
 <script>
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
-  const doc = (name) => db.collection('pantalla').doc(name);
+  let doc = null; // apunta a los datos de la cuenta con la que se entró
   const auth = firebase.auth();
   const $ = (id) => document.getElementById(id);
   const toList = (v) => (Array.isArray(v) ? v : Object.values(v || {})).filter(Boolean);
@@ -146,23 +161,55 @@
   let listening = false;
 
   // ---------- Sesión ----------
-  $('btnIn').onclick = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
-    .catch((e) => { $('loginMsg').textContent = 'No se pudo entrar: ' + e.message; });
+  function loginMsg(text, isError) {
+    $('loginMsg').textContent = text;
+    $('loginMsg').classList.toggle('error', !!isError);
+  }
+
+  $('login').onsubmit = (e) => {
+    e.preventDefault();
+    $('btnIn').disabled = true;
+    auth.signInWithEmailAndPassword($('email').value.trim(), $('pass').value)
+      .catch((err) => {
+        const bad = ['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'];
+        loginMsg(bad.includes(err.code)
+          ? 'El correo o la contraseña no coinciden. Revisa que el correo esté creado en Authentication.'
+          : err.code === 'auth/too-many-requests'
+            ? 'Demasiados intentos. Espera unos minutos y vuelve a probar.'
+            : 'No se pudo entrar: ' + err.message, true);
+      })
+      .finally(() => { $('btnIn').disabled = false; });
+  };
+
+  $('btnReset').onclick = () => {
+    const email = $('email').value.trim();
+    if (!email) { loginMsg('Escribe tu correo arriba y vuelve a tocar “Olvidé mi contraseña”.', true); return; }
+    auth.sendPasswordResetEmail(email)
+      .then(() => loginMsg('Si el correo está registrado, te llegó un enlace para crear una contraseña nueva.'))
+      .catch((err) => loginMsg('No se pudo enviar el correo: ' + err.message, true));
+  };
+  $('btnGoogle').onclick = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+    .catch((err) => {
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
+      loginMsg('No se pudo entrar con Google: ' + err.message, true);
+    });
   $('btnOut').onclick = () => auth.signOut();
 
+  let signedUid = null;
   auth.onAuthStateChanged((u) => {
-    const ok = u && u.email === ADMIN_EMAIL;
+    if (!u && signedUid) { location.reload(); return; } // cambió de cuenta: empezar limpio
+    const ok = !!u;
     $('login').hidden = ok;
     $('app').hidden = !ok;
     $('btnOut').hidden = !u;
-    $('who').textContent = u ? u.email : '';
-    $('btnIn').hidden = !!u;
-    if (u && !ok) $('loginMsg').textContent = 'Esta cuenta no tiene permiso. Entra con el correo del local.';
-    if (ok && !listening) listen();
+    $('who').textContent = u ? (u.email || u.displayName) : '';
+    if (!u) $('pass').value = '';
+    if (ok && !listening) { signedUid = u.uid; listen(u.uid); }
   });
 
-  function listen() {
+  function listen(uid) {
     listening = true;
+    doc = (name) => db.collection('users').doc(uid).collection('pantalla').doc(name);
     ['playlist', 'ads'].forEach((key) => {
       doc(key).onSnapshot((s) => {
         lists[key] = toList(s.data()?.items);

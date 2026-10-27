@@ -42,9 +42,51 @@
   }
   #start small { font-size: 1rem; font-weight: 600; color: var(--muted); }
   #start[hidden] { display: none; }
+
+  /* ---------- Inicio de sesión de la pantalla ---------- */
+  #login {
+    position: fixed; inset: 0; z-index: 20;
+    display: grid; place-items: center; padding: 1rem;
+    background: radial-gradient(circle at 50% 35%, #31214f, var(--bg) 70%);
+  }
+  #login[hidden] { display: none; }
+  .login-box { width: 100%; max-width: 380px; }
+  .login-box h1 { margin: 0 0 .4rem; font-size: 1.8rem; font-weight: 800; }
+  .login-box p { margin: 0 0 1.2rem; color: var(--muted); }
+  .login-box p.error { color: #ff7a8a; }
+  .login-box label { display: block; font-size: .9rem; color: var(--muted); margin: .7rem 0 .3rem; }
+  .login-box input {
+    width: 100%; padding: .65rem .8rem; font: inherit; color: var(--text);
+    background: #26183f; border: 1px solid #432f6b; border-radius: 8px;
+  }
+  .lbtn {
+    width: 100%; padding: .7rem; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer;
+    border: 1px solid #432f6b; background: #31214f; color: var(--text);
+  }
+  .lbtn.primary { background: var(--accent); border-color: var(--accent); color: #2a1600; }
+  .lbtn:focus-visible, .login-box input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sep { display: flex; align-items: center; gap: .7rem; color: var(--muted); font-size: .85rem; margin: 1.1rem 0 .2rem; }
+  .sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: #432f6b; }
+  #btnMail { margin-top: 1rem; }
+
+  /* Barra de cuenta: aparece solo al mover el mouse */
+  #account {
+    position: fixed; top: .7rem; right: .7rem; z-index: 8;
+    display: flex; align-items: center; gap: .6rem;
+    padding: .45rem .5rem .45rem .8rem; border-radius: 10px;
+    background: rgba(27, 16, 48, .9); border: 1px solid #432f6b; font-size: .9rem;
+    transition: opacity .3s;
+  }
+  #account[hidden] { display: none; }
+  body.idle #account { opacity: 0; pointer-events: none; }
+  #account button {
+    font: inherit; font-size: .85rem; color: var(--text); cursor: pointer;
+    background: #31214f; border: 1px solid #432f6b; border-radius: 6px; padding: .3rem .6rem;
+  }
   #start:focus-visible { outline: 3px solid var(--accent); outline-offset: -6px; }
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
 </head>
@@ -63,12 +105,29 @@
   </section>
 </div>
 
+<div id="login" hidden>
+  <form class="login-box" id="loginForm">
+    <h1>Pantalla</h1>
+    <p id="loginMsg">Entra con la misma cuenta que usas en el panel de control.</p>
+    <button class="lbtn primary" type="button" id="btnGoogle">Entrar con Google</button>
+    <div class="sep">o con correo</div>
+    <label for="email">Correo</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="pass">Contraseña</label>
+    <input id="pass" type="password" autocomplete="current-password" required>
+    <button class="lbtn" type="submit" id="btnMail">Entrar con correo</button>
+  </form>
+</div>
+
+<div id="account" hidden><span id="who"></span><button id="btnOut" type="button">Cambiar cuenta</button></div>
+
 <button id="start" hidden>Iniciar la música<small>El navegador necesita un clic para reproducir con sonido</small></button>
 
 <script>
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
-  const doc = (name) => db.collection('pantalla').doc(name);
+  const auth = firebase.auth();
+  let doc = null; // apunta a los datos de la cuenta con la que se entró
   const $ = (id) => document.getElementById(id);
   const toList = (v) => (Array.isArray(v) ? v : Object.values(v || {})).filter(Boolean);
 
@@ -90,39 +149,79 @@
   const L = [$('L0'), $('L1')];
 
   // ---------- Firebase ----------
-  doc('playlist').onSnapshot((s) => {
-    playlist = toList(s.data()?.items);
-    playlistLoaded = true;
-    if (current) {
-      const i = playlist.findIndex((x) => x.uid === current.uid);
-      if (i >= 0) lastIndex = i;
+  // ---------- Cuenta ----------
+  let signedUid = null;
+
+  function loginMsg(text, isError) {
+    $('loginMsg').textContent = text;
+    $('loginMsg').classList.toggle('error', !!isError);
+  }
+  function loginError(err) {
+    const bad = ['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found', 'auth/invalid-email'];
+    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
+    loginMsg(bad.includes(err.code) ? 'El correo o la contraseña no coinciden.' : 'No se pudo entrar: ' + err.message, true);
+  }
+
+  $('btnGoogle').onclick = () => auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(loginError);
+  $('loginForm').onsubmit = (e) => {
+    e.preventDefault();
+    auth.signInWithEmailAndPassword($('email').value.trim(), $('pass').value).catch(loginError);
+  };
+  $('btnOut').onclick = () => auth.signOut();
+
+  auth.onAuthStateChanged((u) => {
+    if (!u) {
+      if (signedUid) { location.reload(); return; } // cambió de cuenta: empezar limpio
+      $('login').hidden = false;
+      $('account').hidden = true;
+      $('musicStatus').textContent = 'Inicia sesión para cargar tu música';
+      $('adStatus').textContent = 'Inicia sesión para cargar tu publicidad';
+      return;
     }
-    musicStatus();
-    tryAuto();
-    if (started && !current) playFirst();
-  }, (e) => { $('musicStatus').textContent = 'Sin conexión con Firebase: ' + e.message; });
-
-  doc('ads').onSnapshot((s) => {
-    ads = toList(s.data()?.items);
-    syncAds();
+    $('login').hidden = true;
+    $('account').hidden = false;
+    $('who').textContent = u.email || u.displayName || 'Cuenta';
+    if (!signedUid) { signedUid = u.uid; startData(u.uid); }
   });
 
-  doc('settings').onSnapshot((s) => {
-    settings = Object.assign({ crossfade: 6, volume: 100 }, s.data() || {});
-    if (!fadeTimer && ready[active]) players[active].setVolume(VOL());
-  });
+  // ---------- Firebase (datos de esa cuenta) ----------
+  function startData(uid) {
+    doc = (name) => db.collection('users').doc(uid).collection('pantalla').doc(name);
 
-  let firstCommand = true;
-  doc('command').onSnapshot((s) => {
-    if (firstCommand) { firstCommand = false; return; } // ignora el pedido viejo al cargar
-    const c = s.data();
-    if (!c || !started) return;
-    if (c.action === 'next') transitionTo(nextItem());
-    if (c.action === 'play') {
-      const it = playlist.find((x) => x.uid === c.uid);
-      if (it) transitionTo(it);
-    }
-  });
+    doc('playlist').onSnapshot((s) => {
+      playlist = toList(s.data()?.items);
+      playlistLoaded = true;
+      if (current) {
+        const i = playlist.findIndex((x) => x.uid === current.uid);
+        if (i >= 0) lastIndex = i;
+      }
+      musicStatus();
+      tryAuto();
+      if (started && !current) playFirst();
+    }, (e) => { $('musicStatus').textContent = 'Sin conexión con Firebase: ' + e.message; });
+
+    doc('ads').onSnapshot((s) => {
+      ads = toList(s.data()?.items);
+      syncAds();
+    });
+
+    doc('settings').onSnapshot((s) => {
+      settings = Object.assign({ crossfade: 6, volume: 100 }, s.data() || {});
+      if (!fadeTimer && ready[active]) players[active].setVolume(VOL());
+    });
+
+    let firstCommand = true;
+    doc('command').onSnapshot((s) => {
+      if (firstCommand) { firstCommand = false; return; } // ignora el pedido viejo al cargar
+      const c = s.data();
+      if (!c || !started) return;
+      if (c.action === 'next') transitionTo(nextItem());
+      if (c.action === 'play') {
+        const it = playlist.find((x) => x.uid === c.uid);
+        if (it) transitionTo(it);
+      }
+    });
+  }
 
   // ---------- YouTube ----------
   const tag = document.createElement('script');
@@ -162,6 +261,7 @@
   // ---------- Publicidad ----------
   function syncAds() {
     if (!adReady) return;
+    if (!signedUid) return;
     if (!ads.length) {
       adCurrent = null;
       adPlayer.stopVideo();
@@ -218,7 +318,7 @@
     if (!playlist.length) { musicStatus(); return; }
     let i = 0;
     try {
-      const saved = localStorage.getItem('pantalla-ultima');
+      const saved = localStorage.getItem('pantalla-ultima-' + signedUid);
       const si = playlist.findIndex((x) => x.uid === saved);
       if (si >= 0) i = si;
     } catch (e) {}
@@ -325,7 +425,7 @@
   }, 250);
 
   function remember() {
-    try { localStorage.setItem('pantalla-ultima', current.uid); } catch (e) {}
+    try { localStorage.setItem('pantalla-ultima-' + signedUid, current.uid); } catch (e) {}
   }
 
   // ---------- Pantalla ----------
@@ -341,7 +441,7 @@
     }
   });
 
-  let idleTimer;
+  let idleTimer = setTimeout(() => document.body.classList.add('idle'), 5000);
   document.addEventListener('mousemove', () => {
     document.body.classList.remove('idle');
     clearTimeout(idleTimer);
