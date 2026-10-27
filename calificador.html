@@ -116,6 +116,9 @@ header.top{background:color-mix(in srgb,var(--hoja) 92%,transparent);backdrop-fi
   .pagina{page-break-after:always;break-after:page;display:flex;justify-content:center}
   .pagina:last-child{page-break-after:auto;break-after:auto}
   .pagina svg{width:190mm;height:247mm}
+  .pagina.cuatro{display:grid;grid-template-columns:100mm 100mm;grid-template-rows:131mm 131mm;justify-content:center;align-content:center}
+  .pagina.cuatro .celda{display:flex;align-items:center;justify-content:center;outline:.2mm dashed #999;outline-offset:-.1mm}
+  .pagina.cuatro svg{width:99mm;height:128.7mm}
 }
 </style>
 </head>
@@ -161,13 +164,14 @@ const OMR = (() => {
     return { cols, rows: Math.ceil(n / cols), maxCols };
   }
   const capacidad = nOpt => Math.min(100, plan(1, nOpt).maxCols * GRID.maxRows);
-  function layout(n, nOpt, v) {
+  // mini: hoja que se imprime a la mitad (4 por hoja carta), burbujas más grandes en proporción
+  function layout(n, nOpt, v, mini) {
     if (v !== 2) return layoutV1(n, nOpt);
     const { cols, rows } = plan(n, nOpt), ancho = GRID.right - GRID.left;
-    const rowH = Math.min(9.5, (GRID.bottom - GRID.top) / rows);
-    const optW = Math.min(7.5, (ancho / cols - 14) / nOpt);
+    const rowH = Math.min(mini ? 16 : 9.5, (GRID.bottom - GRID.top) / rows);
+    const optW = Math.min(mini ? 13 : 7.5, (ancho / cols - 14) / nOpt);
     const colW = 14 + nOpt * optW, left = GRID.left + (ancho - (cols * colW - 5)) / 2;
-    const r = Math.min(2.7, optW * 0.4, rowH * 0.38);
+    const r = Math.min(mini ? 4.8 : 2.7, optW * 0.4, rowH * 0.38);
     const q = [];
     for (let i = 0; i < n; i++) {
       const c = Math.floor(i / rows), rr = i % rows;
@@ -330,18 +334,20 @@ const OMR = (() => {
   // Código v2 (varias hojas): inicio + 7 bits preguntas + 3 bits opciones + 8 bits primera pregunta + 2 control + fin
   const CODE2 = { y: 250.5, w: 2.8, h: 3, paso: 4.4, celdas: 22 };
   CODE2.x0 = 100 - CODE2.celdas * CODE2.paso / 2 + (CODE2.paso - CODE2.w) / 2;
-  function codificar2(N, K, off) {
+  // celda 23 (opcional): 1 = hoja mini
+  function codificar2(N, K, off, mini = 0) {
     const b = [1];
     for (let i = 6; i >= 0; i--) b.push((N >> i) & 1);
     for (let i = 2; i >= 0; i--) b.push(((K - 1) >> i) & 1);
     for (let i = 7; i >= 0; i--) b.push((off >> i) & 1);
     const unos = b.slice(1).reduce((a, c) => a + c, 0);
-    b.push(unos % 2, (N + K + off) % 2, 1);
+    b.push(unos % 2, (N + K + off + (mini ? 1 : 0)) % 2, 1, mini ? 1 : 0);
     return b;
   }
-  const celdas2 = () => Array.from({ length: CODE2.celdas }, (_, i) => ({ x: CODE2.x0 + i * CODE2.paso, y: CODE2.y, w: CODE2.w, h: CODE2.h }));
-  function paginas(n, nOpt) {
-    const cap = capacidad(nOpt), total = Math.max(1, Math.ceil(n / cap)), per = Math.ceil(n / total);
+  const celdas2 = () => Array.from({ length: CODE2.celdas + 1 }, (_, i) => ({ x: CODE2.x0 + i * CODE2.paso, y: CODE2.y, w: CODE2.w, h: CODE2.h }));
+  const capMini = nOpt => Math.min(capacidad(nOpt), nOpt <= 5 ? 30 : 20);
+  function paginas(n, nOpt, mini) {
+    const cap = mini ? capMini(nOpt) : capacidad(nOpt), total = Math.max(1, Math.ceil(n / cap)), per = Math.ceil(n / total);
     return Array.from({ length: total }, (_, i) => ({ idx: i, total, off: i * per, N: Math.min(per, n - i * per) }));
   }
   function celdasCodigo() {
@@ -355,7 +361,8 @@ const OMR = (() => {
       for (let i = 8; i <= 10; i++) K = K * 2 + b2[i];
       for (let i = 11; i <= 18; i++) off = off * 2 + b2[i];
       K += 1;
-      if (N >= 1 && N <= 100 && K >= 2 && b2.join('') === codificar2(N, K, off).join('')) return { N, K, off };
+      const mini = b2[22];
+      if (N >= 1 && N <= 100 && K >= 2 && b2.join('') === codificar2(N, K, off, mini).join('')) return { N, K, off, mini: !!mini };
     }
     const b = celdasCodigo().map(r => sampleRect(bin, W, H, Hm, r) > 0.5 ? 1 : 0);
     let N = 0, K = 0;
@@ -385,13 +392,13 @@ const OMR = (() => {
       if (!formato) throw new Error('No se pudo leer la franja de cuadritos de abajo de la hoja (indica qué hoja es). Tome la foto de nuevo con la hoja completa.');
       n = formato.N; nOpt = formato.K; v = 2;
     }
-    const L = layout(n, nOpt, v);
+    const L = layout(n, nOpt, v, formato?.mini);
     const fills = L.q.map(q => q.opts.map(([x, y]) => sampleFill(bin, W, H, best.Hm, x, y, L.r * 0.62)));
     if (!formato) formato = { N: n, K: nOpt, off: 0 };
     return { respuestas: fills.map(decide), fills, H: best.Hm, layout: L, markers: P, formato };
   }
 
-  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, paginas, codificar, celdasCodigo, codificar2, celdas2, homography, apply, read };
+  return { SHEET_W, SHEET_H, MARK, MARK_TL, MARK_C, ORIENT, LETRAS, layout, capacidad, capMini, paginas, codificar, celdasCodigo, codificar2, celdas2, homography, apply, read };
 })();
 </script>
 <script type="module">
@@ -538,7 +545,7 @@ function calificar(resp, clave, escala) {
 /* ---------------- hoja universal del colegio ---------------- */
 const CAMPOS_U = [
   ['estudiante', 'Estudiante'], ['codigo', 'Código / documento'], ['curso', 'Curso'], ['materia', 'Materia'],
-  ['docente', 'Docente'], ['prueba', 'Prueba'], ['periodo', 'Trimestre'], ['fecha', 'Fecha'], ['calificacion', 'Calificación']
+  ['grado', 'Grado'], ['docente', 'Docente'], ['prueba', 'Prueba'], ['periodo', 'Trimestre'], ['fecha', 'Fecha'], ['calificacion', 'Calificación']
 ];
 const UNI_DEF = { colegio: NOMBRE_COLEGIO, preguntas: 50, opciones: 5, campos: ['estudiante', 'codigo', 'materia', 'docente', 'fecha', 'calificacion'] };
 const uni = () => ({ ...UNI_DEF, ...(S.uniCfg || {}) });
@@ -548,53 +555,60 @@ function escucharUni() {
     if (['admin', 'pruebas'].includes(S.view)) render();
   }, e => console.warn('Hoja universal:', e.message)));
 }
-function svgCodigo(N, K, off) {
-  const bits = OMR.codificar2(N, K, off), cel = OMR.celdas2();
+function svgCodigo(N, K, off, mini = false) {
+  const bits = OMR.codificar2(N, K, off, mini ? 1 : 0), cel = OMR.celdas2();
   let s = '';
-  cel.forEach((r, i) => s += bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.35}" y="${r.y + 0.35}" width="${r.w - 0.7}" height="${r.h - 0.7}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
+  cel.forEach((r, i) => s += (i === 22 && !mini) ? '' : bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.35}" y="${r.y + 0.35}" width="${r.w - 0.7}" height="${r.h - 0.7}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
   return s;
 }
 const pagUnica = n => ({ idx: 0, total: 1, off: 0, N: n });
 function hojaUniversalPag(cfg, vals = {}, pg = pagUnica(cfg.preguntas)) {
-  const Ly = OMR.layout(pg.N, cfg.opciones, 2);
+  const mini = !!cfg.mini, k = mini ? 1.55 : 1;
+  const Ly = OMR.layout(pg.N, cfg.opciones, 2, mini);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
   s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
   OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
   const o = OMR.ORIENT; s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#000"/>`;
-  if (cfg.colegio) s += textoAjustado(100, 9.6, cfg.colegio.toUpperCase(), 136, 3.6, 'font-weight="700" text-anchor="middle"');
-  s += `<text x="100" y="18.5" font-size="5.4" font-weight="700" text-anchor="middle">HOJA DE RESPUESTAS${pg.total > 1 ? ` · ${pg.idx + 1} DE ${pg.total}` : ''}</text>`;
-  const sel = CAMPOS_U.filter(([k]) => (cfg.campos || []).includes(k));
-  const ancho = ([, et]) => et.length * 1.72 + 3;
+  let y = 9.6;
+  if (cfg.colegio) { s += textoAjustado(100, mini ? 11 : 9.6, cfg.colegio.toUpperCase(), 136, 3.6 * Math.min(k, 1.3), 'font-weight="700" text-anchor="middle"'); y = mini ? 22 : 18.5; }
+  else y = mini ? 21 : 18.5;
+  s += textoAjustado(100, y, `HOJA DE RESPUESTAS${pg.total > 1 ? ` · ${pg.idx + 1} DE ${pg.total}` : ''}`, 170, 5.4 * k, 'font-weight="700" text-anchor="middle"');
+  const sel = CAMPOS_U.filter(([c]) => (cfg.campos || []).includes(c));
   const filas = [];
-  const est = sel.find(([k]) => k === 'estudiante');
+  const est = sel.find(([c]) => c === 'estudiante');
   if (est) filas.push([est]);
-  const resto = sel.filter(([k]) => k !== 'estudiante');
+  const resto = sel.filter(([c]) => c !== 'estudiante');
   for (let i = 0; i < resto.length; i += 2) filas.push(resto.slice(i, i + 2));
   if (filas.length) {
-    const y0 = 23, h = filas.length * 7 + 2.5;
-    s += `<rect x="12" y="${y0}" width="176" height="${h}" rx="2" fill="none" stroke="#000" stroke-width=".3"/>`;
+    const y0 = y + 4.5, paso = Math.min(7 * k, (66 - y0) / filas.length), kf = paso / 7;
+    const ancho = ([, et]) => et.length * 1.72 * kf + 3;
+    s += `<rect x="12" y="${y0}" width="176" height="${filas.length * paso + 2.5}" rx="2" fill="none" stroke="#000" stroke-width="${0.3 * k}"/>`;
     filas.forEach((fila, i) => {
-      const y = y0 + 6.3 + i * 7;
-      if (fila.length === 1 && fila[0][0] === 'estudiante') s += campo(15, y, fila[0][1] + ':', vals[fila[0][0]] || '', 185, ancho(fila[0]));
-      else fila.forEach((c, j) => { const x = j ? 102 : 15; s += campo(x, y, c[1] + ':', vals[c[0]] || '', j ? 185 : 98, ancho(c)); });
+      const yy = y0 + paso * 0.9 + i * paso;
+      if (fila.length === 1 && fila[0][0] === 'estudiante') s += campo(15, yy, fila[0][1] + ':', vals.estudiante || '', 185, ancho(fila[0]), kf);
+      else fila.forEach((c, j) => { const x = j ? 102 : 15; s += campo(x, yy, c[1] + ':', vals[c[0]] || '', j ? 185 : 98, ancho(c), kf); });
     });
   }
-  s += `<text x="14" y="72.5" font-size="2.8" fill="#333">Rellene por completo un solo círculo por pregunta. Responda solo las preguntas y opciones que indique el docente.</text>`;
-  s += svgCodigo(pg.N, cfg.opciones, pg.off);
-  s += `<text x="${OMR.celdas2()[21].x + 5}" y="${OMR.celdas2()[0].y + 2.4}" font-size="2.4" fill="#666">${pg.off + 1}–${pg.off + pg.N} · A–${L[cfg.opciones - 1]}</text>`;
+  s += mini
+    ? `<text x="100" y="70" font-size="${2.8 * k}" fill="#333" text-anchor="middle">Rellene por completo un solo círculo por pregunta.</text>`
+    : `<text x="14" y="72.5" font-size="2.8" fill="#333">Rellene por completo un solo círculo por pregunta. Responda solo las preguntas y opciones que indique el docente.</text>`;
+  s += svgCodigo(pg.N, cfg.opciones, pg.off, mini);
+  const cel = OMR.celdas2();
+  s += `<text x="${cel[22].x + 5}" y="${cel[0].y + 2.4}" font-size="2.4" fill="#666">${pg.off + 1}–${pg.off + pg.N} · A–${L[cfg.opciones - 1]}</text>`;
+  const fl = Math.min(3 * k, Ly.optW * 0.7);
   for (let c = 0; c < Ly.cols; c++) {
     const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
-    q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2.2}" font-size="3" font-weight="700" text-anchor="middle">${L[i]}</text>`);
+    q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2.2}" font-size="${fl}" font-weight="700" text-anchor="middle">${L[i]}</text>`);
   }
-  const fs = Math.min(3.3, Ly.rowH * 0.45);
+  const fs = Math.min(3.3 * k, Ly.rowH * 0.45);
   Ly.q.forEach(q => {
     s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num + pg.off}</text>`;
-    q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width=".3"/>`);
+    q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width="${0.3 * k}"/>`);
   });
   return s + '</svg>';
 }
 function hojasUniversal(cfg, vals = {}) {
-  return OMR.paginas(cfg.preguntas, cfg.opciones).map(pg => hojaUniversalPag(cfg, vals, pg));
+  return OMR.paginas(cfg.preguntas, cfg.opciones, cfg.mini).map(pg => hojaUniversalPag(cfg, vals, pg));
 }
 const hojaUniversalSVG = (cfg, vals) => hojasUniversal(cfg, vals).join('');
 function vUniversal(editable) {
@@ -607,6 +621,10 @@ function vUniversal(editable) {
       <label class="f">Opciones: de la A hasta la${selOpt('tOpt', u.opciones)}</label>
       <label class="f">Copias<input id="tCopias" type="number" min="1" max="200" value="1"></label>
     </div>
+    <div class="row">
+      <label class="f">Encabezado<select id="tEnc"><option value="completo">Del colegio</option><option value="sencillo">Sencillo: estudiante, código y grado</option></select></label>
+      <label class="f">Tamaño<select id="tTam"><option value="1">1 por hoja</option><option value="4">4 por hoja carta (ahorra papel)</option></select></label>
+    </div>
     <p class="estado" id="tCap"></p>
     <div class="acciones"><button class="btn pri" data-a="imprimirUni">Imprimir hoja universal</button><button class="btn" data-a="verUni">Ver vista previa</button></div>
     <div class="vista-hoja" id="vistaUniT" hidden></div></div>`;
@@ -618,6 +636,7 @@ function vUniversal(editable) {
       <label class="f">Preguntas (por defecto)<input id="uPreg" type="number" min="5" max="${cap}" value="${u.preguntas}"></label>
       <label class="f">Opciones: de la A hasta la${selOpt('uOpt', u.opciones)}</label>
       <label class="f">Copias<input id="tCopias" type="number" min="1" max="200" value="1"></label>
+      <label class="f">Tamaño al imprimir<select id="tTam"><option value="1">1 por hoja</option><option value="4">4 por hoja carta</option></select></label>
     </div>
     <p class="estado">Datos que se llenan a mano en el encabezado:</p>
     <div class="acciones" style="margin-bottom:12px">${CAMPOS_U.map(([k, et]) => `<label class="chip"><input type="checkbox" class="uCampo" value="${k}" ${u.campos.includes(k) ? 'checked' : ''}> ${et}</label>`).join('')}</div>
@@ -635,15 +654,30 @@ function leerUniForm() {
   };
 }
 function cfgUniImprimir() {
-  if (esAdmin() && $('#uOpt')) return { ...uni(), ...leerUniForm() };
-  const K = parseInt($('#tOpt')?.value) || uni().opciones, cap = OMR.capacidad(K) * 3;
-  let N = Math.max(5, Math.min(cap, parseInt($('#tPreg')?.value) || uni().preguntas));
-  if ($('#tPreg') && +$('#tPreg').value > cap) $('#tPreg').value = N;
-  const nh = OMR.paginas(N, K).length;
-  const c = $('#tCap'); if (c) c.textContent = `Con opciones hasta la ${L[K - 1]} caben ${OMR.capacidad(K)} preguntas por hoja (hasta ${cap} en 3 hojas).${nh > 1 ? ` Se imprimen ${nh} hojas por estudiante.` : ''}`;
-  return { ...uni(), preguntas: N, opciones: K };
+  const mini = $('#tTam')?.value === '4', sencillo = $('#tEnc')?.value === 'sencillo';
+  let cfg;
+  if (esAdmin() && $('#uOpt')) cfg = { ...uni(), ...leerUniForm() };
+  else {
+    const K = parseInt($('#tOpt')?.value) || uni().opciones;
+    cfg = { ...uni(), preguntas: parseInt($('#tPreg')?.value) || uni().preguntas, opciones: K };
+  }
+  const K = cfg.opciones, porHoja = mini ? OMR.capMini(K) : OMR.capacidad(K), cap = porHoja * 3;
+  if (cfg.preguntas > cap) { cfg.preguntas = cap; const i = $('#tPreg') || $('#uPreg'); if (i && !esAdmin()) i.value = cap; }
+  cfg.preguntas = Math.max(5, cfg.preguntas);
+  if (sencillo) { cfg.colegio = ''; cfg.campos = CAMPOS_SENCILLO; }
+  cfg.mini = mini;
+  const nh = OMR.paginas(cfg.preguntas, K, mini).length;
+  const c = $('#tCap'); if (c) c.textContent = `${mini ? 'Hoja pequeña (4 por carta)' : 'Hoja completa'}: con opciones hasta la ${L[K - 1]} caben ${porHoja} preguntas por hoja (hasta ${cap} en 3 hojas).${nh > 1 ? ` Se imprimen ${nh} hojas por estudiante.` : ''}`;
+  return cfg;
 }
-function hojasDePrueba(p, est) {
+const CAMPOS_SENCILLO = ['estudiante', 'codigo', 'grado'];
+function hojasDePrueba(p, est, fmt = {}) {
+  const valsEst = est ? { estudiante: `${est.apellido} ${est.nombre}`, codigo: est.codigo } : {};
+  if (fmt.mini || fmt.sencillo) {
+    const base = p.hoja === 'universal' ? uni() : { colegio: p.colegio || '', campos: ['estudiante', 'codigo', 'grado', 'materia', 'docente', 'fecha'] };
+    const cfg = { colegio: fmt.sencillo ? '' : base.colegio, campos: fmt.sencillo ? CAMPOS_SENCILLO : base.campos, preguntas: p.n, opciones: p.nOpt, mini: !!fmt.mini };
+    return hojasUniversal(cfg, { ...valsEst, grado: p.cursoNombre, curso: p.cursoNombre, ...(fmt.sencillo ? {} : { materia: p.materia, docente: p.docente, prueba: p.nombre, periodo: p.periodo, fecha: fechaTxt(p.fecha) }) });
+  }
   if (p.hoja !== 'universal') {
     if (p.v !== 2) return [hojaSVGv1(p, est)];
     return OMR.paginas(p.n, p.nOpt).map(pg => hojaSVG(p, est, pg));
@@ -909,6 +943,8 @@ function vPrueba() {
   <p class="estado">${esc(c?.nombre || 'Curso eliminado')}, ${p.n} preguntas, opciones ${L.slice(0, p.nOpt).split('').join(', ')}, nota sobre ${p.escala}</p>
   ${faltaClave ? `<p class="aviso">La clave tiene preguntas sin respuesta correcta; esas preguntas no se califican.</p>` : ''}
   <div class="acciones" style="margin-bottom:16px">
+    <label class="f" style="margin:0;flex:0 0 auto">Tamaño<select id="impTam"><option value="1">1 por hoja</option><option value="4">4 por hoja carta</option></select></label>
+    <label class="f" style="margin:0;flex:0 0 auto">Encabezado<select id="impEnc"><option value="completo">${p.hoja === 'universal' ? 'Del colegio' : 'De la prueba'}</option><option value="sencillo">Sencillo: estudiante, código y grado</option></select></label>
     <button class="btn" data-a="imprimir" data-modo="blanco">Imprimir hoja en blanco</button>
     <button class="btn" data-a="imprimir" data-modo="nombres">Imprimir hojas con nombres</button>
     <button class="btn" data-a="editarPrueba">Editar clave</button>
@@ -1161,11 +1197,11 @@ function textoAjustado(x, y, txt, maxW, size, extra = '') {
   const fit = est > maxW ? ` textLength="${maxW}" lengthAdjust="spacingAndGlyphs"` : '';
   return `<text x="${x}" y="${y}" font-size="${size}"${fit} ${extra}>${esc(txt)}</text>`;
 }
-function campo(x, y, etiqueta, valor, fin, wEtq) {
-  let s = `<text x="${x}" y="${y}" font-size="3.3" fill="#444">${etiqueta}</text>`;
+function campo(x, y, etiqueta, valor, fin, wEtq, k = 1) {
+  let s = `<text x="${x}" y="${y}" font-size="${3.3 * k}" fill="#444">${etiqueta}</text>`;
   const x2 = x + wEtq;
-  if (valor) s += textoAjustado(x2, y, valor, fin - x2, 3.6, 'font-weight="700"');
-  else s += `<line x1="${x2}" y1="${y + 0.7}" x2="${fin}" y2="${y + 0.7}" stroke="#000" stroke-width=".25"/>`;
+  if (valor) s += textoAjustado(x2, y, valor, fin - x2, 3.6 * k, 'font-weight="700"');
+  else s += `<line x1="${x2}" y1="${y + 0.7 * k}" x2="${fin}" y2="${y + 0.7 * k}" stroke="#000" stroke-width="${0.25 * k}"/>`;
   return s;
 }
 function hojaSVG(p, est, pg = pagUnica(p.n)) {
@@ -1200,11 +1236,21 @@ function hojaSVG(p, est, pg = pagUnica(p.n)) {
   s += svgCodigo(pg.N, p.nOpt, pg.off);
   return s + '</svg>';
 }
+function imprimirSVGs(svgs, cuatro) {
+  let html = '';
+  if (cuatro) for (let i = 0; i < svgs.length; i += 4) html += `<div class="pagina cuatro">${svgs.slice(i, i + 4).map(h => `<div class="celda">${h}</div>`).join('')}</div>`;
+  else html = svgs.map(h => `<div class="pagina">${h}</div>`).join('');
+  $('#printArea').innerHTML = html;
+  setTimeout(() => window.print(), 60);
+}
 function imprimir(modo) {
   const p = prueba(), est = curso(p.cursoId)?.estudiantes || [];
+  const cuatro = $('#impTam')?.value === '4', sencillo = cuatro || $('#impEnc')?.value === 'sencillo';
+  if (cuatro && p.n > OMR.capMini(p.nOpt) * 3) return alert(`Con 4 hojas por carta caben hasta ${OMR.capMini(p.nOpt) * 3} preguntas (${OMR.capMini(p.nOpt)} por hoja pequeña). Use el tamaño normal.`);
   const lista = modo === 'nombres' ? est : [null];
-  $('#printArea').innerHTML = lista.map(e => hojasDePrueba(p, e).map(h => `<div class="pagina">${h}</div>`).join('')).join('');
-  setTimeout(() => window.print(), 50);
+  let svgs = lista.flatMap(e => hojasDePrueba(p, e, { mini: cuatro, sencillo }));
+  if (modo !== 'nombres' && cuatro && svgs.length < 4) { const k = svgs.length; while (svgs.length < 4) svgs.push(svgs[svgs.length % k]); }
+  imprimirSVGs(svgs, cuatro);
 }
 
 /* ---------------- exportar ---------------- */
@@ -1255,9 +1301,11 @@ const A = {
   },
   imprimirUni() {
     const cfg = cfgUniImprimir(), copias = Math.max(1, Math.min(200, parseInt($('#tCopias')?.value) || 1));
-    const juego = hojasUniversal(cfg).map(h => `<div class="pagina">${h}</div>`).join('');
-    $('#printArea').innerHTML = juego.repeat(copias);
-    setTimeout(() => window.print(), 50);
+    let svgs = [];
+    const juego = hojasUniversal(cfg);
+    for (let i = 0; i < copias; i++) svgs = svgs.concat(juego);
+    if (cfg.mini) while (svgs.length % 4) svgs.push(juego[svgs.length % juego.length]);   // completa la carta
+    imprimirSVGs(svgs, cfg.mini);
   },
   verUni() { const v = $('#vistaUniT'); v.hidden = !v.hidden; if (!v.hidden) v.innerHTML = hojaUniversalSVG(cfgUniImprimir()); },
   async crearProfesor() {
@@ -1446,7 +1494,7 @@ document.addEventListener('input', e => {
   if (S.view === 'pruebaForm' && ['pNombre', 'pColegio', 'pDocente', 'pMateria', 'pPeriodo'].includes(e.target.id)) { leerFormPrueba(); pintarVista(); }
 });
 function vistaUniViva(e) {
-  if (['tPreg', 'tOpt'].includes(e.target.id)) { const v = $('#vistaUniT'), cfg = cfgUniImprimir(); if (v && !v.hidden) v.innerHTML = hojaUniversalSVG(cfg); }
+  if (['tPreg', 'tOpt', 'tEnc', 'tTam'].includes(e.target.id)) { const v = $('#vistaUniT'), cfg = cfgUniImprimir(); if (v && !v.hidden) v.innerHTML = hojaUniversalSVG(cfg); }
   if (S.view === 'admin' && (['uColegio', 'uPreg', 'uOpt'].includes(e.target.id) || e.target.classList?.contains('uCampo'))) {
     const v = $('#vistaUni'); if (v) v.innerHTML = hojaUniversalSVG({ ...uni(), ...leerUniForm() });
   }
