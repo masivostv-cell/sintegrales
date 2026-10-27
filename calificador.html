@@ -725,7 +725,7 @@ const tabs = () => `<div class="tabs" role="tablist">
 
 function vPruebas() {
   const items = S.pruebas.map(p => `<li data-a="abrirPrueba" data-id="${p.id}"><div class="t"><b>${esc(p.nombre)}</b>
-    <small>${esc(p.cursoNombre || 'Sin curso')}, ${p.n} preguntas</small></div><span class="btn">Abrir</span></li>`).join('');
+    <small>${esc(p.cursoNombre || 'Sin curso')}, ${p.n} preguntas</small></div><span class="btn">Abrir</span><button class="btn peligro" data-a="borrarPrueba" data-id="${p.id}" aria-label="Eliminar ${esc(p.nombre)}">Eliminar</button></li>`).join('');
   return tabs() + `<div class="panel">
     <div class="acciones" style="justify-content:space-between;align-items:center"><h3 style="margin:0">Mis pruebas</h3>
     <button class="btn pri" data-a="nuevaPrueba" ${S.cursos.length ? '' : 'disabled'}>Nueva prueba</button></div>
@@ -745,7 +745,8 @@ function vCursos() {
 /* ---- curso: crear / editar e importar listado ---- */
 function vCursoForm() {
   const f = S.form;
-  const filas = f.estudiantes.slice(0, 200).map(e => `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)}</td><td>${esc(e.nombre)}</td></tr>`).join('');
+  const filas = f.estudiantes.map(e => `<tr><td>${esc(e.codigo)}</td><td>${esc(e.apellido)}</td><td>${esc(e.nombre)}</td>
+    <td><button class="btn peligro" data-a="quitarEst" data-cod="${esc(e.codigo)}" aria-label="Quitar a ${esc(e.apellido)} ${esc(e.nombre)}">Quitar</button></td></tr>`).join('');
   return `<p><button class="btn" data-a="ir" data-v="cursos">Volver</button></p>
   <h2>${f.id ? 'Editar curso' : 'Nuevo curso'}</h2>
   <div class="panel">
@@ -759,7 +760,15 @@ function vCursoForm() {
     <button class="btn" data-a="leerPegado">Usar texto pegado</button>
     ${f.error ? `<p class="err">${esc(f.error)}</p>` : ''}
     <p><b>${f.estudiantes.length}</b> estudiantes en el listado.</p>
-    ${filas ? `<div class="tabla"><table><thead><tr><th>Código</th><th>Apellido</th><th>Nombre</th></tr></thead><tbody>${filas}</tbody></table></div>` : ''}
+    <h3 style="margin-top:14px">Agregar un estudiante</h3>
+    <div class="row">
+      <label class="f">Código o documento<input id="aeCod" autocomplete="off"></label>
+      <label class="f">Apellidos<input id="aeApe" autocomplete="off"></label>
+      <label class="f">Nombres<input id="aeNom" autocomplete="off"></label>
+      <div style="flex:0 0 auto;margin-bottom:10px"><button class="btn" data-a="agregarEst">Agregar</button></div>
+    </div>
+    ${f.cambios ? '<p class="aviso">Hay cambios sin guardar. Toque “Guardar curso” para que queden guardados.</p>' : ''}
+    ${filas ? `<div class="tabla"><table><thead><tr><th>Código</th><th>Apellido</th><th>Nombre</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>` : ''}
   </div>
   <div class="acciones"><button class="btn pri" data-a="guardarCurso">Guardar curso</button>
   ${f.id ? `<button class="btn peligro" data-a="borrarCurso">Eliminar curso</button>` : ''}</div>`;
@@ -904,6 +913,7 @@ function vPrueba() {
     <button class="btn" data-a="imprimir" data-modo="nombres">Imprimir hojas con nombres</button>
     <button class="btn" data-a="editarPrueba">Editar clave</button>
     <button class="btn pri" data-a="exportar">Exportar a Excel</button>
+    <button class="btn peligro" data-a="borrarPrueba" data-id="${p.id}">Eliminar prueba</button>
   </div>
   <div class="panel">
     <h3>Calificar</h3>
@@ -1002,9 +1012,12 @@ function mostrarSug() {
   ul.hidden = false; inp.setAttribute('aria-expanded', 'true');
   inp.setAttribute('aria-activedescendant', S.sugLista.length ? 'sug' + S.sugIdx : '');
 }
+function asignarHoja(e) { S.scan.est = e; S.scan.asignadaDespues = true; S.scan.error = ''; }
 function elegirEstudiante(codigo) {
   const e = estudiantesPrueba().find(x => x.codigo === codigo), inp = $('#codInput'); if (!e || !inp) return;
-  S.sel = codigo; S.scan = null; S.sugIdx = 0;
+  if (S.scan?.hojas?.length && (!S.scan.est || S.scan.asignadaDespues)) asignarHoja(e);   // hoja escaneada sin estudiante: se le asigna
+  else S.scan = null;
+  S.sel = codigo; S.sugIdx = 0;
   inp.value = `${e.apellido} ${e.nombre}`.trim();
   mostrarSug(); pintarScan();
 }
@@ -1016,12 +1029,12 @@ function actualizarEstudiante() {
   const e = estudianteActual(), info = $('#estInfo'), btn = $('#btnScan'), inp = $('#codInput');
   if (!info) return;
   const v = inp.value.trim();
-  btn.setAttribute('aria-disabled', e ? 'false' : 'true');
-  btn.style.opacity = e ? 1 : .45; $('#scanInput').disabled = !e;
+  btn.setAttribute('aria-disabled', 'false'); btn.style.opacity = 1; $('#scanInput').disabled = false;
+  if (S.scan?.hojas?.length && !S.scan.est) { info.innerHTML = ''; return; }
   if (e) {
     const r = S.resultados[e.codigo];
     info.innerHTML = `<p class="estudiante">${esc(e.apellido)} ${esc(e.nombre)}</p>${r ? '<p class="aviso">Este estudiante ya tiene calificación. Si escanea de nuevo, se reemplaza.</p>' : ''}`;
-  } else info.innerHTML = v ? '<p class="estado">Elija un estudiante de la lista para poder escanear su hoja.</p>' : '';
+  } else info.innerHTML = `<p class="estado">${v ? 'Elija un estudiante de la lista, o escanee' : 'Puede escanear'} la hoja primero y decir de quién es al guardar.</p>`;
 }
 function cobertura(s, n) {
   const ok = new Array(n).fill(false);
@@ -1038,7 +1051,7 @@ function pintarScan() {
   actualizarEstudiante();
   const s = S.scan, p = prueba();
   const lbl = $('#btnScan');
-  if (lbl && lbl.firstChild) lbl.firstChild.textContent = s && s.hojas?.length ? 'Escanear otra hoja de este estudiante ' : 'Escanear hoja con la cámara ';
+  if (lbl && lbl.firstChild) lbl.firstChild.textContent = s && s.hojas?.length ? (s.est ? 'Escanear otra hoja de este estudiante ' : 'Escanear otra hoja de este mismo estudiante ') : 'Escanear hoja con la cámara ';
   if (!s) { box.innerHTML = ''; return; }
   const aviso = s.cargando ? '<p class="cargando">Leyendo la hoja…</p>' : s.error ? `<p class="err">${esc(s.error)}</p>` : '';
   if (!s.hojas?.length) { box.innerHTML = aviso; return; }
@@ -1047,7 +1060,9 @@ function pintarScan() {
   const faltan = cobertura(s, p.n);
   const total = p.hoja === 'universal' || p.v !== 2 ? 0 : OMR.paginas(p.n, p.nOpt).length;
   box.innerHTML = `<hr style="border:0;border-top:1px solid var(--linea);margin:16px 0">${aviso}
-    <p class="estudiante">${esc(s.est.apellido)} ${esc(s.est.nombre)}</p>
+    ${s.est ? `<p class="estudiante">${esc(s.est.apellido)} ${esc(s.est.nombre)}${s.asignadaDespues ? ' <button class="btn" data-a="cambiarDueno">Cambiar</button>' : ''}</p>
+      ${s.asignadaDespues && S.resultados[s.est.codigo] ? '<p class="aviso">Este estudiante ya tiene calificación. Al guardar, se reemplaza.</p>' : ''}`
+      : `<div class="aviso"><b>¿De quién es esta hoja?</b> Escriba el código o el nombre del estudiante en el buscador de arriba y elíjalo. Luego toque “Guardar y seguir”.</div>`}
     ${faltan.length ? `<p class="aviso"><b>Falta escanear ${total > 1 ? `${total - s.hojas.length > 1 ? 'hojas' : 'una hoja'}` : 'otra hoja'}:</b> preguntas ${faltan.join(', ')}. Use el botón “Escanear otra hoja de este estudiante”. Si guarda así, esas preguntas quedan en blanco.</p>`
       : s.hojas.length > 1 ? `<p class="estado ok">Hojas completas: ${s.hojas.length} de ${s.hojas.length}.</p>` : ''}
     <div class="nota"><div class="sello"><b>${g.nota.toFixed(1)}</b><span>de ${p.escala}</span></div>
@@ -1264,12 +1279,28 @@ const A = {
   ir(el) { if (S.unsubRes) { S.unsubRes(); S.unsubRes = null; } S.view = el.dataset.v; S.msg = ''; render(); },
   nuevoCurso() { S.form = { nombre: '', estudiantes: [] }; S.view = 'curso'; render(); },
   editarCurso(el) { const c = curso(el.dataset.id); S.form = { id: c.id, nombre: c.nombre, estudiantes: [...(c.estudiantes || [])] }; S.view = 'curso'; render(); },
+  quitarEst(el) {
+    const f = S.form, e = f.estudiantes.find(x => x.codigo === el.dataset.cod); if (!e) return;
+    if (!confirm(`¿Quitar a ${e.apellido} ${e.nombre} del curso?`)) return;
+    f.nombre = $('#cNombre').value; f.estudiantes = f.estudiantes.filter(x => x !== e); f.cambios = true; f.error = '';
+    render();
+  },
+  agregarEst() {
+    const f = S.form, codigo = $('#aeCod').value.trim(), apellido = $('#aeApe').value.trim(), nombre = $('#aeNom').value.trim();
+    f.nombre = $('#cNombre').value;
+    if (!codigo || !(apellido || nombre)) { f.error = 'Escriba el código y el nombre del estudiante.'; return render(); }
+    if (f.estudiantes.some(x => x.codigo === codigo)) { f.error = `Ya hay un estudiante con el código ${codigo}.`; return render(); }
+    f.estudiantes.push({ codigo, apellido, nombre });
+    f.estudiantes.sort((a, b) => (a.apellido + a.nombre).localeCompare(b.apellido + b.nombre, 'es'));
+    f.cambios = true; f.error = '';
+    render(); $('#aeCod')?.focus();
+  },
   leerPegado() {
     S.form.nombre = $('#cNombre').value;
     const rows = $('#cPegar').value.split(/\r?\n/).map(l => l.split(/\t|;|,/));
     const est = filasAEstudiantes(rows);
     S.form.error = est.length ? '' : 'No se encontraron estudiantes en el texto pegado.';
-    if (est.length) S.form.estudiantes = est;
+    if (est.length) { S.form.estudiantes = est; S.form.cambios = true; }
     render();
   },
   async guardarCurso() {
@@ -1306,11 +1337,17 @@ const A = {
       else { const r = await addDoc(collection(db, ruta('pruebas')), { ...data, creada: serverTimestamp() }); S.pruebas.unshift({ id: r.id, ...data }); abrirPrueba(r.id); }
     } catch (e) { $('#claveErr').textContent = e.message; }
   },
-  async borrarPrueba() {
-    if (!confirm('¿Eliminar esta prueba y todos sus resultados?')) return;
-    const id = S.form.id, snap = await getDocs(collection(db, ruta('pruebas', id, 'resultados')));
-    const b = writeBatch(db); snap.docs.forEach(d => b.delete(d.ref)); b.delete(doc(db, ruta('pruebas', id))); await b.commit();
-    S.view = 'pruebas'; render();
+  async borrarPrueba(el) {
+    const id = el?.dataset?.id || S.form?.id; if (!id) return;
+    const pr = S.pruebas.find(x => x.id === id);
+    try {
+      const snap = await getDocs(collection(db, ruta('pruebas', id, 'resultados')));
+      const n = snap.size;
+      if (!confirm(`¿Eliminar la prueba “${pr?.nombre || ''}”?${n ? ` También se borrarán ${n} calificaciones.` : ''} Esto no se puede deshacer.`)) return;
+      const b = writeBatch(db); snap.docs.forEach(d => b.delete(d.ref)); b.delete(doc(db, ruta('pruebas', id))); await b.commit();
+      if (S.pruebaId === id && S.unsubRes) { S.unsubRes(); S.unsubRes = null; }
+      S.view = 'pruebas'; S.msg = ''; render();
+    } catch (e) { mostrarError(e); }
   },
   abrirPrueba(el) { abrirPrueba(el.dataset.id); },
   imprimir(el) { imprimir(el.dataset.modo); },
@@ -1324,8 +1361,13 @@ const A = {
     const y = window.scrollY; pintarScan(); window.scrollTo(0, y);
   },
   descartar() { S.scan = null; pintarScan(); },
+  cambiarDueno() { const i = $('#codInput'); i.value = ''; S.sel = null; i.focus(); i.scrollIntoView({ behavior: 'smooth', block: 'center' }); },
   async guardarRes() {
     const s = S.scan, p = prueba(), g = calificar(s.respuestas, p.clave, p.escala);
+    if (!s.est) {
+      s.error = 'Falta decir de quién es la hoja: escriba el código o el nombre en el buscador y elija al estudiante.';
+      pintarScan(); const i = $('#codInput'); i.scrollIntoView({ behavior: 'smooth', block: 'center' }); i.focus(); return;
+    }
     const faltan = cobertura(s, p.n);
     if (faltan.length && !confirm(`Faltan las preguntas ${faltan.join(', ')} (otra hoja). ¿Guardar de todas formas? Esas preguntas quedan en blanco.`)) return;
     try {
@@ -1361,9 +1403,10 @@ document.addEventListener('keydown', e => {
 document.addEventListener('input', e => {
   if (e.target.id === 'codInput') {
     S.sel = null; S.sugIdx = 0;
-    if (S.scan && !S.scan.cargando) S.scan = null;
+    const pendiente = S.scan?.hojas?.length && (!S.scan.est || S.scan.asignadaDespues);
+    if (S.scan && !S.scan.cargando && !pendiente) S.scan = null;
     const v = e.target.value.trim(), exacto = estudiantesPrueba().find(x => norm(x.codigo) === norm(v));
-    if (exacto && /\d/.test(v)) S.sel = exacto.codigo;   // código completo (o lector de código de barras): se elige solo
+    if (exacto && /\d/.test(v)) { S.sel = exacto.codigo; if (pendiente) asignarHoja(exacto); }   // código completo (o lector de código de barras): se elige solo
     pintarScan(); mostrarSug();
   }
   if (e.target.id === 'filtroTabla') actualizarPrueba();
@@ -1394,8 +1437,10 @@ document.addEventListener('change', async e => {
   if (['pN', 'pOpt', 'pCurso', 'pFecha', 'pHoja'].includes(t.id)) { leerFormPrueba(); pintarClave(); pintarVista(); }
   if (t.id === 'scanInput' && t.files[0]) {
     const est = estudianteActual(), p = prueba(), file = t.files[0]; t.value = '';
-    if (!est) return;
-    if (!S.scan || S.scan.est?.codigo !== est.codigo || !S.scan.hojas) S.scan = { est, hojas: [], respuestas: new Array(p.n).fill('') };
+    const sc0 = S.scan;
+    const seguir = sc0?.hojas?.length && (!est || !sc0.est || sc0.est.codigo === est.codigo);
+    if (!seguir) S.scan = { est: est || null, hojas: [], respuestas: new Array(p.n).fill('') };
+    else if (est && !sc0.est) asignarHoja(est);
     S.scan.cargando = true; S.scan.error = ''; pintarScan();
     await new Promise(r => setTimeout(r, 30));
     try {
@@ -1408,6 +1453,7 @@ document.addEventListener('change', async e => {
     } catch (err) { S.scan.error = err.message; }
     S.scan.cargando = false;
     pintarScan();
+    if (!S.scan.est && S.scan.hojas.length) { const i = $('#codInput'); i.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => i.focus(), 300); }
   }
   if (t.id === 'scanClave' && t.files[0]) {
     leerFormPrueba(); const file = t.files[0]; t.value = '';
