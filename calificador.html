@@ -165,22 +165,35 @@ const OMR = (() => {
   }
   const capacidad = nOpt => Math.min(100, plan(1, nOpt).maxCols * GRID.maxRows);
   // mini: hoja que se imprime a la mitad (4 por hoja carta), burbujas más grandes en proporción
+  // mini 2: elige las columnas que dejan las burbujas más grandes (más preguntas por hoja pequeña)
+  const TOP_MINI = 54;
+  function planMini(n, nOpt) {
+    const ancho = GRID.right - GRID.left; let b = null;
+    for (let c = 1; c <= 8; c++) {
+      const rows = Math.ceil(n / c); if (rows > 30) continue;
+      const optW = Math.min(13, (ancho / c - 14) / nOpt); if (optW <= 0) continue;
+      const r = Math.min(4.8, optW * 0.4, Math.min(16, (GRID.bottom - TOP_MINI) / rows) * 0.38);
+      if (!b || r > b.r + 1e-9) b = { cols: c, rows, r };
+    }
+    return b;
+  }
   function layout(n, nOpt, v, mini) {
     if (v !== 2) return layoutV1(n, nOpt);
-    const { cols, rows } = plan(n, nOpt), ancho = GRID.right - GRID.left;
-    const rowH = Math.min(mini ? 16 : 9.5, (GRID.bottom - GRID.top) / rows);
+    const { cols, rows } = mini === 2 ? planMini(n, nOpt) : plan(n, nOpt), ancho = GRID.right - GRID.left;
+    const top = mini === 2 ? TOP_MINI : GRID.top;
+    const rowH = Math.min(mini ? 16 : 9.5, (GRID.bottom - top) / rows);
     const optW = Math.min(mini ? 13 : 7.5, (ancho / cols - 14) / nOpt);
     const colW = 14 + nOpt * optW, left = GRID.left + (ancho - (cols * colW - 5)) / 2;
     const r = Math.min(mini ? 4.8 : 2.7, optW * 0.4, rowH * 0.38);
     const q = [];
     for (let i = 0; i < n; i++) {
       const c = Math.floor(i / rows), rr = i % rows;
-      const x0 = left + c * colW, y = GRID.top + rr * rowH + rowH / 2;
+      const x0 = left + c * colW, y = top + rr * rowH + rowH / 2;
       const opts = [];
       for (let o = 0; o < nOpt; o++) opts.push([x0 + 9 + o * optW + optW / 2, y]);
       q.push({ num: i + 1, numX: x0 + 7, y, opts });
     }
-    return { cols, rows, rowH, colW, optW, r, top: GRID.top, left, q };
+    return { cols, rows, rowH, colW, optW, r, top: mini === 2 ? TOP_MINI : GRID.top, left, q };
   }
 
   function solve(A, b) {
@@ -335,17 +348,18 @@ const OMR = (() => {
   const CODE2 = { y: 250.5, w: 2.8, h: 3, paso: 4.4, celdas: 22 };
   CODE2.x0 = 100 - CODE2.celdas * CODE2.paso / 2 + (CODE2.paso - CODE2.w) / 2;
   // celda 23 (opcional): 1 = hoja mini
+  // mini: 0 normal, 1 hoja pequeña (diseño anterior), 2 hoja pequeña actual
   function codificar2(N, K, off, mini = 0) {
     const b = [1];
     for (let i = 6; i >= 0; i--) b.push((N >> i) & 1);
     for (let i = 2; i >= 0; i--) b.push(((K - 1) >> i) & 1);
     for (let i = 7; i >= 0; i--) b.push((off >> i) & 1);
     const unos = b.slice(1).reduce((a, c) => a + c, 0);
-    b.push(unos % 2, (N + K + off + (mini ? 1 : 0)) % 2, 1, mini ? 1 : 0);
+    b.push(unos % 2, (N + K + off + (mini ? 1 : 0) + (mini === 2 ? 1 : 0)) % 2, 1, mini ? 1 : 0, mini === 2 ? 1 : 0);
     return b;
   }
-  const celdas2 = () => Array.from({ length: CODE2.celdas + 1 }, (_, i) => ({ x: CODE2.x0 + i * CODE2.paso, y: CODE2.y, w: CODE2.w, h: CODE2.h }));
-  const capMini = nOpt => Math.min(capacidad(nOpt), nOpt <= 5 ? 30 : 20);
+  const celdas2 = () => Array.from({ length: CODE2.celdas + 2 }, (_, i) => ({ x: CODE2.x0 + i * CODE2.paso, y: CODE2.y, w: CODE2.w, h: CODE2.h }));
+  const capMini = nOpt => nOpt <= 5 ? 60 : 40;
   function paginas(n, nOpt, mini) {
     const cap = mini ? capMini(nOpt) : capacidad(nOpt), total = Math.max(1, Math.ceil(n / cap)), per = Math.ceil(n / total);
     return Array.from({ length: total }, (_, i) => ({ idx: i, total, off: i * per, N: Math.min(per, n - i * per) }));
@@ -361,8 +375,11 @@ const OMR = (() => {
       for (let i = 8; i <= 10; i++) K = K * 2 + b2[i];
       for (let i = 11; i <= 18; i++) off = off * 2 + b2[i];
       K += 1;
-      const mini = b2[22];
-      if (N >= 1 && N <= 100 && K >= 2 && b2.join('') === codificar2(N, K, off, mini).join('')) return { N, K, off, mini: !!mini };
+      const cands = b2[22] ? (b2[23] ? [2, 1] : [1]) : [0];
+      for (const m of cands) {
+        const e = codificar2(N, K, off, m);
+        if (N >= 1 && N <= 100 && K >= 2 && e.slice(0, 23).join('') === b2.slice(0, 23).join('') && (m !== 2 || b2[23] === 1)) return { N, K, off, mini: m };
+      }
     }
     const b = celdasCodigo().map(r => sampleRect(bin, W, H, Hm, r) > 0.5 ? 1 : 0);
     let N = 0, K = 0;
@@ -555,20 +572,21 @@ function escucharUni() {
     if (['admin', 'pruebas'].includes(S.view)) render();
   }, e => console.warn('Hoja universal:', e.message)));
 }
-function svgCodigo(N, K, off, mini = false) {
-  const bits = OMR.codificar2(N, K, off, mini ? 1 : 0), cel = OMR.celdas2();
+function svgCodigo(N, K, off, mini = 0) {
+  const bits = OMR.codificar2(N, K, off, mini), cel = OMR.celdas2();
   let s = '';
-  cel.forEach((r, i) => s += (i === 22 && !mini) ? '' : bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.35}" y="${r.y + 0.35}" width="${r.w - 0.7}" height="${r.h - 0.7}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
+  cel.forEach((r, i) => s += ((i === 22 && !mini) || (i === 23 && mini !== 2)) ? '' : bits[i] ? `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#000"/>` : `<rect x="${r.x + 0.35}" y="${r.y + 0.35}" width="${r.w - 0.7}" height="${r.h - 0.7}" fill="none" stroke="#bbb" stroke-width=".15"/>`);
   return s;
 }
 const pagUnica = n => ({ idx: 0, total: 1, off: 0, N: n });
 function hojaUniversalPag(cfg, vals = {}, pg = pagUnica(cfg.preguntas)) {
-  const mini = !!cfg.mini, k = mini ? 1.55 : 1;
+  const mini = cfg.mini ? 2 : 0, k = mini ? 1.55 : 1;
   const Ly = OMR.layout(pg.N, cfg.opciones, 2, mini);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${OMR.SHEET_W} ${OMR.SHEET_H}" font-family="Arial, Helvetica, sans-serif">`;
   s += `<rect width="${OMR.SHEET_W}" height="${OMR.SHEET_H}" fill="#fff"/>`;
   OMR.MARK_TL.forEach(([x, y]) => s += `<rect x="${x}" y="${y}" width="${OMR.MARK}" height="${OMR.MARK}" fill="#000"/>`);
   const o = OMR.ORIENT; s += `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#000"/>`;
+  if (mini) return hojaMiniPag(cfg, vals, pg, Ly, s);
   let y = 9.6;
   if (cfg.colegio) { s += textoAjustado(100, mini ? 11 : 9.6, cfg.colegio.toUpperCase(), 136, 3.6 * Math.min(k, 1.3), 'font-weight="700" text-anchor="middle"'); y = mini ? 22 : 18.5; }
   else y = mini ? 21 : 18.5;
@@ -594,7 +612,7 @@ function hojaUniversalPag(cfg, vals = {}, pg = pagUnica(cfg.preguntas)) {
     : `<text x="14" y="72.5" font-size="2.8" fill="#333">Rellene por completo un solo círculo por pregunta. Responda solo las preguntas y opciones que indique el docente.</text>`;
   s += svgCodigo(pg.N, cfg.opciones, pg.off, mini);
   const cel = OMR.celdas2();
-  s += `<text x="${cel[22].x + 5}" y="${cel[0].y + 2.4}" font-size="2.4" fill="#666">${pg.off + 1}–${pg.off + pg.N} · A–${L[cfg.opciones - 1]}</text>`;
+  s += `<text x="${cel[23].x + 5}" y="${cel[0].y + 2.4}" font-size="2.4" fill="#666">${pg.off + 1}–${pg.off + pg.N} · A–${L[cfg.opciones - 1]}</text>`;
   const fl = Math.min(3 * k, Ly.optW * 0.7);
   for (let c = 0; c < Ly.cols; c++) {
     const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
@@ -604,6 +622,30 @@ function hojaUniversalPag(cfg, vals = {}, pg = pagUnica(cfg.preguntas)) {
   Ly.q.forEach(q => {
     s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num + pg.off}</text>`;
     q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width="${0.3 * k}"/>`);
+  });
+  return s + '</svg>';
+}
+// Hoja pequeña (4 por carta): título pequeño y solo Estudiante, Materia, Fecha y Periodo académico
+function hojaMiniPag(cfg, vals, pg, Ly, s) {
+  s += `<text x="100" y="12" font-size="4.6" font-weight="700" text-anchor="middle" letter-spacing=".3">HOJA DE RESPUESTAS${pg.total > 1 ? ` · ${pg.idx + 1} DE ${pg.total}` : ''}</text>`;
+  const k = 1.45, w = et => et.length * 1.72 * k + 3;
+  s += `<rect x="12" y="15" width="176" height="31.5" rx="2" fill="none" stroke="#000" stroke-width=".45"/>`;
+  s += campo(15, 23, 'Estudiante:', vals.estudiante || '', 185, w('Estudiante:'), k);
+  s += campo(15, 32.5, 'Materia:', vals.materia || '', 112, w('Materia:'), k);
+  s += campo(116, 32.5, 'Fecha:', vals.fecha || '', 185, w('Fecha:'), k);
+  s += campo(15, 42, 'Periodo académico:', vals.periodo || '', 112, w('Periodo académico:'), k);
+  s += svgCodigo(pg.N, cfg.opciones, pg.off, 2);
+  const cel = OMR.celdas2();
+  s += `<text x="${cel[23].x + 5}" y="${cel[0].y + 2.4}" font-size="2.4" fill="#666">${pg.off + 1}–${pg.off + pg.N} · A–${L[cfg.opciones - 1]}</text>`;
+  const fl = Math.min(4.6, Ly.optW * 0.7);
+  for (let c = 0; c < Ly.cols; c++) {
+    const q0 = Ly.q[c * Ly.rows]; if (!q0) continue;
+    q0.opts.forEach(([x], i) => s += `<text x="${x}" y="${Ly.top - 2.2}" font-size="${fl}" font-weight="700" text-anchor="middle">${L[i]}</text>`);
+  }
+  const fs = Math.min(5.1, Ly.rowH * 0.45);
+  Ly.q.forEach(q => {
+    s += `<text x="${q.numX}" y="${q.y + fs * 0.36}" font-size="${fs}" font-weight="700" text-anchor="end">${q.num + pg.off}</text>`;
+    q.opts.forEach(([x, y]) => s += `<circle cx="${x}" cy="${y}" r="${Ly.r}" fill="none" stroke="#000" stroke-width=".45"/>`);
   });
   return s + '</svg>';
 }
@@ -623,7 +665,7 @@ function vUniversal(editable) {
     </div>
     <div class="row">
       <label class="f">Encabezado<select id="tEnc"><option value="completo">Del colegio</option><option value="sencillo">Sencillo: estudiante, código y grado</option></select></label>
-      <label class="f">Tamaño<select id="tTam"><option value="1">1 por hoja</option><option value="4">4 por hoja carta (ahorra papel)</option></select></label>
+      <label class="f">Tamaño<select id="tTam"><option value="1">1 por hoja</option><option value="4">4 por hoja carta (ahorra papel; encabezado: estudiante, materia, fecha y periodo)</option></select></label>
     </div>
     <p class="estado" id="tCap"></p>
     <div class="acciones"><button class="btn pri" data-a="imprimirUni">Imprimir hoja universal</button><button class="btn" data-a="verUni">Ver vista previa</button></div>
@@ -676,7 +718,7 @@ function hojasDePrueba(p, est, fmt = {}) {
   if (fmt.mini || fmt.sencillo) {
     const base = p.hoja === 'universal' ? uni() : { colegio: p.colegio || '', campos: ['estudiante', 'codigo', 'grado', 'materia', 'docente', 'fecha'] };
     const cfg = { colegio: fmt.sencillo ? '' : base.colegio, campos: fmt.sencillo ? CAMPOS_SENCILLO : base.campos, preguntas: p.n, opciones: p.nOpt, mini: !!fmt.mini };
-    return hojasUniversal(cfg, { ...valsEst, grado: p.cursoNombre, curso: p.cursoNombre, ...(fmt.sencillo ? {} : { materia: p.materia, docente: p.docente, prueba: p.nombre, periodo: p.periodo, fecha: fechaTxt(p.fecha) }) });
+    return hojasUniversal(cfg, { ...valsEst, grado: p.cursoNombre, curso: p.cursoNombre, ...((fmt.sencillo && !fmt.mini) ? {} : { materia: p.materia, docente: p.docente, prueba: p.nombre, periodo: p.periodo, fecha: fechaTxt(p.fecha) }) });
   }
   if (p.hoja !== 'universal') {
     if (p.v !== 2) return [hojaSVGv1(p, est)];
